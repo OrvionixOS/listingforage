@@ -1,0 +1,58 @@
+"""ListingForge AI — API entrypoint."""
+import logging
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from .config import get_settings
+from .database import init_db
+from .routes import (auth_routes, billing_routes, etsy_routes,
+                     listing_routes, workspace_routes)
+
+logging.basicConfig(level=logging.INFO)
+settings = get_settings()
+
+app = FastAPI(title=settings.app_name, version="1.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"] if settings.env == "development" else ["https://app.listingforge.ai"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(auth_routes.router)
+app.include_router(listing_routes.router)
+app.include_router(billing_routes.router)
+app.include_router(etsy_routes.router)
+app.include_router(workspace_routes.router)
+
+
+@app.on_event("startup")
+def _start_job_workers():
+    from .database import init_db
+    from .jobs import recover_and_start
+    init_db()          # tables must exist before recovery scans them
+    recover_and_start()
+
+
+@app.on_event("startup")
+def startup():
+    init_db()
+
+
+@app.get("/api/health")
+def health():
+    return {"status": "ok", "app": settings.app_name}
+
+
+# --- Serve the built frontend (single-service deploy) -----------------------
+# Build with `npm run build` in /frontend; dist is mounted here if present.
+from pathlib import Path
+
+from fastapi.staticfiles import StaticFiles
+
+_dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+if _dist.exists():
+    app.mount("/", StaticFiles(directory=str(_dist), html=True), name="frontend")
