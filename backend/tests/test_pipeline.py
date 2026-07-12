@@ -224,6 +224,103 @@ def make_pricing() -> S.PricingStrategy:
 # Tests
 # ---------------------------------------------------------------------------
 
+def test_market_research_aggregation():
+    """Pure reduction of raw Etsy rows → deterministic market snapshot."""
+    from app.etsy import market_research as mr
+
+    rows = [
+        {"title": f"Gold Foil Digital Paper Seamless Texture Wedding {i}",
+         "price": {"amount": 500 + i * 100, "divisor": 100},
+         "num_favorers": 10 + i,
+         "tags": ["gold texture", "wedding paper"]}
+        for i in range(5)
+    ]
+    snap = mr.aggregate("gold foil digital paper", rows)
+    assert snap.ok and snap.listings_analyzed == 5
+    assert snap.price_min == 5.0 and snap.price_max == 9.0 and snap.price_median == 7.0
+    assert snap.avg_favorites == 12.0
+    # keyword's own words and stopwords are excluded; convergent terms kept with counts
+    joined = " ".join(snap.top_title_terms)
+    assert "seamless (5/5)" in joined and "wedding (5/5)" in joined
+    assert "gold" not in joined.split()  # keyword word excluded
+    assert snap.top_tags[0].startswith("gold texture (5)")
+    assert len(snap.sample_titles) == 5
+    rendered = snap.render()
+    assert "LIVE ETSY MARKET DATA" in rendered and "median $7.00" in rendered
+    # empty / failure snapshots are honest
+    empty = mr.aggregate("x", [])
+    assert not empty.ok and empty.render() == ""
+    print("PASS market research aggregation: prices, terms, tags, honest empty state")
+
+
+def test_competitor_intel_grounding_and_provenance():
+    """Live snapshot must reach the model prompt; data_source is set by the
+    engine from what actually happened, never by the model."""
+    from unittest.mock import patch as _patch
+
+    from app.etsy.market_research import MarketSnapshot
+    from app.pipeline import competitor_intelligence as ci
+
+    analysis, bde, listing = make_analysis(), make_bde(), make_listing()
+    classification = S.CategoryClassification(
+        category="digital_bundle", confidence=0.9, reasoning="r",
+        listing_structure_implications=["a", "b", "c", "d"])
+    seen = {}
+
+    def fake_call(system, content, schema, **kw):
+        seen["content"] = content
+        out = make_competitor_intel()
+        out.data_source = "live_etsy_data"  # model lies about provenance…
+        return out, {"tokens_in": 1, "tokens_out": 1}
+
+    live = MarketSnapshot(keyword="gold foil digital paper", listings_analyzed=25,
+                          price_min=4.5, price_median=8.0, price_max=14.0,
+                          sample_titles=["Competitor Gold Paper Pack"])
+    with _patch.object(ci, "structured_call", fake_call):
+        result, _ = ci.run(analysis, bde, classification, listing, snapshot=live)
+    assert "LIVE ETSY MARKET DATA" in seen["content"]
+    assert "median $8.00" in seen["content"]
+    assert result.data_source == "live_etsy_data"
+    assert result.market_snapshot["listings_analyzed"] == 25
+
+    dead = MarketSnapshot(keyword="gold foil digital paper", error="ETSY_API_KEY not configured")
+    with _patch.object(ci, "structured_call", fake_call):
+        result2, _ = ci.run(analysis, bde, classification, listing, snapshot=dead)
+    assert "NO LIVE MARKET DATA AVAILABLE" in seen["content"]
+    assert result2.data_source == "model_knowledge"  # …but the engine corrects it
+    assert result2.market_snapshot["error"] == "ETSY_API_KEY not configured"
+    print("PASS competitor intel grounding: snapshot injected, provenance engine-enforced")
+
+
+def test_pricing_receives_market_prices():
+    from unittest.mock import patch as _patch
+
+    from app.pipeline import pricing_strategy as ps
+
+    analysis, bde = make_analysis(), make_bde()
+    classification = S.CategoryClassification(
+        category="digital_bundle", confidence=0.9, reasoning="r",
+        listing_structure_implications=["a", "b", "c", "d"])
+    seen = {}
+
+    def fake_call(system, content, schema, **kw):
+        seen["content"] = content
+        return make_pricing(), {"tokens_in": 1, "tokens_out": 1}
+
+    intel = make_competitor_intel()
+    intel.market_snapshot = {"keyword": "gold foil digital paper",
+                             "listings_analyzed": 25, "price_min": 4.5,
+                             "price_median": 8.0, "price_max": 14.0}
+    with _patch.object(ps, "structured_call", fake_call):
+        ps.run(analysis, bde, classification, competitor_intel=intel)
+    assert "LIVE MARKET PRICES" in seen["content"] and "median $8.00" in seen["content"]
+
+    with _patch.object(ps, "structured_call", fake_call):
+        ps.run(analysis, bde, classification, competitor_intel=None)
+    assert "NO LIVE MARKET PRICES AVAILABLE" in seen["content"]
+    print("PASS pricing grounding: measured median reaches the prompt, honest fallback")
+
+
 def test_signal_extraction():
     s = signals.extract(
         "Gold Foil Digital Bundle 12 Files Instant Download",
@@ -378,6 +475,9 @@ def test_fail_safe_when_never_valid():
 
 
 if __name__ == "__main__":
+    test_market_research_aggregation()
+    test_competitor_intel_grounding_and_provenance()
+    test_pricing_receives_market_prices()
     test_signal_extraction()
     test_score_blend()
     test_validator_rejects_and_feeds_back()

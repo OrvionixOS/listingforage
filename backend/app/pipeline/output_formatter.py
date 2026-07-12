@@ -29,8 +29,22 @@ def _etsy_paste_ready(listing: ListingStrategy, pricing: PricingStrategy) -> str
 
 
 def _competitor_brief(intel: CompetitorIntelligence) -> str:
-    lines = ["COMPETITOR INTELLIGENCE", "=" * 40, "",
-             "Best-selling patterns:"]
+    lines = ["COMPETITOR INTELLIGENCE", "=" * 40]
+    snap = intel.market_snapshot or {}
+    if intel.data_source == "live_etsy_data" and snap.get("listings_analyzed"):
+        lines += ["",
+                  f"Data source: LIVE ETSY SEARCH — top {snap['listings_analyzed']} active "
+                  f"listings for \"{snap.get('keyword', '')}\" at generation time.",
+                  f"Measured prices: ${snap.get('price_min', 0):.2f}-"
+                  f"${snap.get('price_max', 0):.2f}, median ${snap.get('price_median', 0):.2f}"]
+        if snap.get("top_title_terms"):
+            lines.append("Measured title terms: " + ", ".join(snap["top_title_terms"][:8]))
+        if snap.get("top_tags"):
+            lines.append("Measured tags: " + ", ".join(snap["top_tags"][:8]))
+    else:
+        lines += ["", "Data source: category-convention modeling (no live Etsy data "
+                      "available at generation time)."]
+    lines += ["", "Best-selling patterns:"]
     lines += [f"- {p}" for p in intel.best_selling_patterns]
     lines += ["", "Competitor weaknesses:"] + [f"- {w}" for w in intel.competitor_weaknesses]
     lines += ["", "Missed opportunities this listing claims:"] + [f"- {m}" for m in intel.missed_opportunities]

@@ -154,10 +154,11 @@ def generate_listing(
         raise PipelineError("competitor_intelligence", str(exc)) from exc
     _acc(usage, u)
 
-    # 7 — pricing strategy
+    # 7 — pricing strategy (grounded in the live market snapshot when available)
     step("pricing_strategy")
     try:
-        pricing, u = pricing_strategy.run(analysis, bde, classification)
+        pricing, u = pricing_strategy.run(analysis, bde, classification,
+                                          competitor_intel=competitor_intel)
     except Exception as exc:
         raise PipelineError("pricing_strategy", str(exc)) from exc
     _acc(usage, u)

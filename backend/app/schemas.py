@@ -405,6 +405,13 @@ class CompetitorIntelligence(BaseModel):
     advantages: list[CompetitorAdvantage] = Field(
         min_length=3, description="How this listing beats competitors: positioning, SEO, imagery, "
                                   "value perception, and buyer communication.")
+    # Provenance — set by the engine AFTER the model call, never by the model.
+    data_source: str = Field(
+        default="model_knowledge",
+        description="live_etsy_data (grounded in a real-time Etsy search) or model_knowledge (fallback).")
+    market_snapshot: dict = Field(
+        default_factory=dict,
+        description="The measured live-market facts (prices, terms, tags, sample titles) the analysis was grounded in.")
 
 
 # ---------------------------------------------------------------------------
