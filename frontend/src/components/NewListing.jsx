@@ -20,7 +20,7 @@ export default function NewListing({ onCreated }) {
 
   // step 2: product questions
   const [what, setWhat] = useState("");
-  const [kind, setKind] = useState("");            // digital | physical
+  const [kind, setKind] = useState("digital");     // digital | physical (digital-first)
   const [price, setPrice] = useState("");
   const [extra, setExtra] = useState("");
 
@@ -35,7 +35,7 @@ export default function NewListing({ onCreated }) {
     setErr(""); setBusy(true);
     try {
       const added = [];
-      for (const f of Array.from(list).slice(0, 10 - files.length)) {
+      for (const f of Array.from(list)) {
         const r = await api.upload(f);
         added.push({ id: r.upload_id, name: f.name,
                      previewUrl: URL.createObjectURL(f) });
@@ -110,27 +110,33 @@ export default function NewListing({ onCreated }) {
 
       {step === 1 && (
         <div className="card">
-          <h2>Product photos</h2>
-          <p className="sub">Up to 10. I'll read colors, materials, sharpness, and
-            background quality straight from the pixels.</p>
+          <h2>Product files</h2>
+          <p className="sub">For digital products, these ARE the product — upload the
+            actual textures, papers, or assets buyers will download. No limit.
+            I'll read palette and quality from a sample, and the 7-image Etsy
+            gallery gets generated separately from this analysis.</p>
           <div className="dropzone" role="button" tabIndex={0}
                onClick={() => fileInput.current?.click()}
                onKeyDown={(e) => e.key === "Enter" && fileInput.current?.click()}
                onDragOver={(e) => e.preventDefault()}
                onDrop={(e) => { e.preventDefault(); addFiles(e.dataTransfer.files); }}>
             {files.length === 0
-              ? <span>Tap to choose photos, or drag them here</span>
-              : <span>{files.length} photo(s) added — tap to add more</span>}
+              ? <span>Tap to choose your product files, or drag them here</span>
+              : <span>{files.length} file(s) added — tap to add more</span>}
           </div>
-          <input ref={fileInput} type="file" accept="image/*" multiple hidden
+          <input ref={fileInput} type="file" accept="image/*,.pdf,.zip" multiple hidden
                  onChange={(e) => addFiles(e.target.files)} />
           {files.length > 0 && (
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
-              {files.map((f) => (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12,
+                          alignItems: "center" }}>
+              {files.slice(0, 12).map((f) => (
                 <img key={f.id} src={f.previewUrl} alt={f.name}
                      style={{ width: 72, height: 72, objectFit: "cover",
                               borderRadius: 8, border: "1px solid var(--hairline)" }} />
               ))}
+              {files.length > 12 && (
+                <span className="sub mono">+{files.length - 12} more</span>
+              )}
             </div>
           )}
           <button className="btn" style={{ marginTop: 16 }}

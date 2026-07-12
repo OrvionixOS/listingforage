@@ -45,8 +45,17 @@ def intake_analyze(body: dict, user: User = Depends(get_current_user),
     uploads = (db.query(Upload)
                .filter(Upload.user_id == user.id, Upload.id.in_(ids)).all())
     if not uploads:
-        raise HTTPException(400, "Upload at least one product photo first.")
-    report = analyze_product_images([u.path for u in uploads])
+        raise HTTPException(400, "Upload at least one product file first.")
+    # Digital packs can be 100+ files; palette/quality are consistent across a
+    # pack, so analyze an evenly-spaced sample and report the true total.
+    SAMPLE = 12
+    image_paths = [u.path for u in uploads
+                   if u.path.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".gif"))]
+    step = max(1, len(image_paths) // SAMPLE)
+    sampled = image_paths[::step][:SAMPLE]
+    report = analyze_product_images(sampled)
+    report["total_files"] = len(uploads)
+    report["analyzed_sample"] = len(sampled)
 
     agg = report.get("aggregate", {})
     sem = agg.get("semantic", {})
@@ -73,7 +82,10 @@ def _vision_context(image_paths: list[str]) -> str:
         return ""
     try:
         from ..imaging.vision_analyzer import analyze_product_images
-        r = analyze_product_images(image_paths, use_semantic=False)
+        imgs = [p for p in image_paths
+                if p.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".gif"))]
+        step = max(1, len(imgs) // 12)
+        r = analyze_product_images(imgs[::step][:12], use_semantic=False)
         agg = r.get("aggregate", {})
         lines = ["PRODUCT PHOTO ANALYSIS (measured from the seller's uploads):",
                  f"- {r['image_count']} photo(s), {agg.get('clean_images', 0)} clean",
