@@ -2,11 +2,13 @@ import { useRef, useState } from "react";
 import { api } from "../lib/api";
 
 /*
- * Photos-first intake wizard.
- *  1. Drop product photos           -> instant pixel analysis
- *  2. Answer only what pixels can't -> product, type, price
- *  3. Brand branch                  -> use existing brand / quick-create / none
- *  4. Generate                      -> 11-step pipeline takes over
+ * Photos-first intake wizard for digital products only.
+ *  1. Drop product files             -> instant pixel analysis
+ *  2. Answer only what pixels can't  -> what it is, price
+ *  3. Brand branch                   -> use existing brand / quick-create / none
+ *  4. Generate                       -> full pipeline takes over: strategy,
+ *                                        SEO, competitor intel, pricing, and
+ *                                        the 10-image Etsy gallery
  */
 export default function NewListing({ onCreated }) {
   const [step, setStep] = useState(1);
@@ -20,7 +22,6 @@ export default function NewListing({ onCreated }) {
 
   // step 2: product questions
   const [what, setWhat] = useState("");
-  const [kind, setKind] = useState("digital");     // digital | physical (digital-first)
   const [price, setPrice] = useState("");
   const [extra, setExtra] = useState("");
 
@@ -55,7 +56,7 @@ export default function NewListing({ onCreated }) {
   };
 
   const toBrandStep = () => {
-    if (!what.trim() || !kind) { setErr("Tell me what it is and pick a type."); return; }
+    if (!what.trim()) { setErr("Tell me what the product is."); return; }
     setErr(""); setStep(3);
   };
 
@@ -77,7 +78,7 @@ export default function NewListing({ onCreated }) {
         await api.saveBrand({ ...b, apply_to_generations: false });
       }
       const description = [
-        `${what.trim()} — ${kind} product.`,
+        `${what.trim()} — digital download product.`,
         analysis.suggested.materials_guess?.length
           ? `Materials/format: ${analysis.suggested.materials_guess.join(", ")}.` : "",
         extra.trim(),
@@ -96,7 +97,9 @@ export default function NewListing({ onCreated }) {
   return (
     <>
       <h1>New listing</h1>
-      <p className="sub">Drop photos. Answer a few questions. The engine does the rest.</p>
+      <p className="sub">Upload your digital product. The AI studio does the rest —
+        strategy, SEO, competitor intelligence, pricing, and the full 10-image
+        Etsy gallery.</p>
 
       <div className="wizard-steps" aria-label="Progress">
         {["Photos", "Product", "Brand", "Generate"].map((label, i) => (
@@ -111,10 +114,11 @@ export default function NewListing({ onCreated }) {
       {step === 1 && (
         <div className="card">
           <h2>Product files</h2>
-          <p className="sub">For digital products, these ARE the product — upload the
-            actual textures, papers, or assets buyers will download. No limit.
-            I'll read palette and quality from a sample, and the 7-image Etsy
-            gallery gets generated separately from this analysis.</p>
+          <p className="sub">These ARE the product — upload the actual printable,
+            planner, template, SVG, bundle, or other digital files buyers will
+            download. No limit. I'll read palette and quality from a sample,
+            and the 10-image Etsy gallery gets generated separately from this
+            analysis.</p>
           <div className="dropzone" role="button" tabIndex={0}
                onClick={() => fileInput.current?.click()}
                onKeyDown={(e) => e.key === "Enter" && fileInput.current?.click()}
@@ -172,16 +176,6 @@ export default function NewListing({ onCreated }) {
           <label className="field"><span>What is this product? (one line)</span>
             <input value={what} onChange={(e) => setWhat(e.target.value)}
                    placeholder="e.g. Liquid gold foil digital paper pack, 12 seamless textures" /></label>
-          <div className="field"><span>Type</span>
-            <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-              {["digital", "physical"].map((k) => (
-                <button key={k} className={kind === k ? "btn" : "btn-ghost"}
-                        onClick={() => setKind(k)} aria-pressed={kind === k}>
-                  {k === "digital" ? "Digital download" : "Physical item"}
-                </button>
-              ))}
-            </div>
-          </div>
           <label className="field" style={{ maxWidth: 200 }}><span>Price (USD)</span>
             <input type="number" min="0.20" step="0.01" value={price}
                    onChange={(e) => setPrice(e.target.value)} placeholder="8.99" /></label>

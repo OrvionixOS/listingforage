@@ -16,18 +16,32 @@ from dataclasses import dataclass, field, asdict
 
 
 # --- lexicons ---------------------------------------------------------------
+# Term hits per digital product category (Digital Product Category Engine).
 
-DIGITAL_TERMS = ["digital download", "instant download", "printable", "svg", "png file",
-                 "jpg file", "pdf", "template", "clipart", "digital paper", "dpi", "digital file"]
-PHYSICAL_TERMS = ["handmade", "ships", "shipping", "sterling", "ceramic", "wood", "leather",
-                  "cotton", "linen", "hand poured", "hand carved", "made to order"]
-POD_TERMS = ["t-shirt", "tshirt", "sweatshirt", "hoodie", "mug", "tote", "unisex",
-             "bella canvas", "gildan", "printed on demand", "poster print", "sizes s-", "size chart"]
-GIFT_TERMS = ["personalized", "personalised", "custom name", "monogram", "engraved",
-              "gift for", "anniversary", "wedding gift", "birthday gift", "mother's day",
-              "father's day", "custom text", "customized"]
-SAAS_TERMS = ["subscription", "software", "app access", "dashboard", "login", "saas",
-              "tool access", "lifetime access", "account", "api"]
+PRINTABLE_ART_TERMS = ["wall art", "printable art", "nursery print", "quote print",
+                        "gallery wall", "minimalist art", "poster print", "art print",
+                        "digital print", "instant download art", "room decor", "home decor"]
+DIGITAL_PLANNER_TERMS = ["planner", "budget planner", "wedding planner", "fitness planner",
+                          "productivity planner", "goodnotes", "digital planner", "undated planner",
+                          "hyperlinked", "ipad planner", "daily planner", "weekly planner"]
+TEMPLATE_TERMS = ["canva template", "template", "resume template", "social media template",
+                   "business template", "editable template", "instagram template",
+                   "presentation template", "flyer template", "cv template"]
+INVITATION_TERMS = ["invitation", "invite template", "wedding invitation", "birthday invitation",
+                     "party invitation", "evite", "rsvp", "save the date", "editable invitation"]
+SVG_CUT_FILE_TERMS = ["svg", "cut file", "cricut", "silhouette cameo", "laser cut", "dxf",
+                       "png svg", "vinyl decal file", "craft file", "eps file"]
+DIGITAL_BUNDLE_TERMS = ["bundle", "clipart bundle", "design pack", "mega bundle",
+                         "collection", "clip art set", "graphics bundle", "mega pack"]
+EDUCATIONAL_TERMS = ["worksheet", "flashcard", "learning resource", "homeschool",
+                      "classroom", "teacher", "lesson plan", "activity sheet", "curriculum"]
+PATTERN_TERMS = ["sewing pattern", "crochet pattern", "knitting pattern", "pdf pattern",
+                  "craft pattern", "quilt pattern", "amigurumi pattern", "digital pattern"]
+
+# File-format lexicon used for grounded digital-delivery details (formats,
+# instructions, compatibility). Detected from filenames and copy, never invented.
+FILE_FORMAT_TERMS = ["svg", "png", "jpg", "jpeg", "pdf", "eps", "dxf", "psd", "ai",
+                      "docx", "pptx", "xlsx", "zip", "ttf", "otf", "procreate", "goodnotes"]
 
 SPEC_PATTERNS = [
     r"\b\d+\s?x\s?\d+\s?(in|inch|inches|cm|mm|px)\b",
@@ -64,6 +78,9 @@ class InputSignals:
     # category term hits
     category_hits: dict = field(default_factory=dict)
 
+    # deterministic file-format detection (from filenames + copy, never invented)
+    detected_formats: list[str] = field(default_factory=list)
+
     # derived heuristic stage scores, 0-100
     attention_signal: int = 0
     interpretation_signal: int = 0
@@ -85,10 +102,11 @@ def _clamp(v: float) -> int:
 
 
 def extract(title: str, description: str, price: float | None,
-            image_count: int) -> InputSignals:
+            image_count: int, filenames: list[str] | None = None) -> InputSignals:
     t = (title or "").lower()
     d = (description or "").lower()
     full = f"{t}\n{d}"
+    names = " ".join(filenames or []).lower()
 
     s = InputSignals(
         title_len=len(title or ""),
@@ -103,12 +121,19 @@ def extract(title: str, description: str, price: float | None,
         value_hits=_count_hits(full, VALUE_TERMS),
         objection_hits=_count_hits(full, OBJECTION_TERMS),
         category_hits={
-            "digital_product": _count_hits(full, DIGITAL_TERMS),
-            "physical_product": _count_hits(full, PHYSICAL_TERMS),
-            "print_on_demand": _count_hits(full, POD_TERMS),
-            "gift_personalized": _count_hits(full, GIFT_TERMS),
-            "saas_tool": _count_hits(full, SAAS_TERMS),
+            "printable_art": _count_hits(full, PRINTABLE_ART_TERMS),
+            "digital_planner": _count_hits(full, DIGITAL_PLANNER_TERMS),
+            "template": _count_hits(full, TEMPLATE_TERMS),
+            "invitation": _count_hits(full, INVITATION_TERMS),
+            "svg_cut_file": _count_hits(full, SVG_CUT_FILE_TERMS),
+            "digital_bundle": _count_hits(full, DIGITAL_BUNDLE_TERMS),
+            "educational_product": _count_hits(full, EDUCATIONAL_TERMS),
+            "pattern": _count_hits(full, PATTERN_TERMS),
         },
+        detected_formats=sorted({
+            term for term in FILE_FORMAT_TERMS
+            if re.search(r"\b" + re.escape(term) + r"\b", f"{full}\n{names}")
+        }),
     )
 
     # --- heuristic stage signals (0-100 baselines) ---------------------------

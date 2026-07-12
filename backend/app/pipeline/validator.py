@@ -1,12 +1,13 @@
 """
-Image Strategy Validator — deterministic audit of the 7-slot system.
+Image Strategy Validator — deterministic audit of the 10-slot Etsy gallery.
 
 Rejection rules (any failure rejects the strategy):
   1. missing trust image        — no TRUST-intent slot with a proof visual
   2. missing scale clarity      — no slot resolving scale / what-you-get
-  3. missing usage demonstration— no lifestyle/mockup usage slot
-  4. duplicate stage coverage   — any psychological stage claimed by >2 slots
-  5. low diversity              — <4 distinct intents or <4 distinct visual types
+  3. missing usage demonstration— fewer than 2 lifestyle/mockup usage slots
+                                  (lifestyle_mockup + alternate_use_case roles)
+  4. duplicate stage coverage   — any psychological stage claimed by >3 slots
+  5. low diversity              — <5 distinct intents or <6 distinct visual types
   6. duplicate uncertainty      — slots sharing a primary uncertainty (also
                                   schema-enforced; re-checked here)
   7. prompt hard requirements   — every prompt renders with lighting/camera/
@@ -28,9 +29,10 @@ from ..schemas import (BDEOutput, CONVERSION_CLAUSE, ImageIntent,
 TRUST_VISUALS = {"zoom_proof", "process_shot", "comparison_split", "unboxing"}
 SCALE_CLARITY_VISUALS = {"scale_reference", "file_grid", "size_chart", "variant_grid", "info_card"}
 USAGE_VISUALS = {"lifestyle_scene", "mockup_in_use"}
-MAX_STAGE_COVERAGE = 2
-MIN_DISTINCT_INTENTS = 4
-MIN_DISTINCT_VISUALS = 4
+MIN_USAGE_SLOTS = 2
+MAX_STAGE_COVERAGE = 3
+MIN_DISTINCT_INTENTS = 5
+MIN_DISTINCT_VISUALS = 6
 
 
 def validate(strategy: ImageStrategy, bde: BDEOutput) -> tuple[bool, list[ValidationCheck], list[str]]:
@@ -61,12 +63,14 @@ def validate(strategy: ImageStrategy, bde: BDEOutput) -> tuple[bool, list[Valida
           else "No scale clarity: nothing shows size, dimensions, or exactly what's included.",
           "Add a slot with scale_reference, file_grid, or size_chart resolving the size/contents doubt.")
 
-    # 3. usage demonstration
+    # 3. usage demonstration (lifestyle_mockup + alternate_use_case roles)
     usage_slots = [s for s in slots if s.required_visual_type in USAGE_VISUALS]
-    check("usage_demonstration_present", bool(usage_slots),
-          f"{len(usage_slots)} usage demonstration slot(s) found." if usage_slots
-          else "No usage demonstration: buyer cannot visualize ownership or use.",
-          "Add a lifestyle_scene or mockup_in_use slot showing the product in real use.")
+    check("usage_demonstration_present", len(usage_slots) >= MIN_USAGE_SLOTS,
+          f"{len(usage_slots)} usage demonstration slot(s) found." if len(usage_slots) >= MIN_USAGE_SLOTS
+          else f"Only {len(usage_slots)} usage demonstration slot(s): need at least {MIN_USAGE_SLOTS} "
+               "(lifestyle_mockup and alternate_use_case).",
+          f"Add lifestyle_scene or mockup_in_use visuals to slots 4 (lifestyle_mockup) and "
+          f"5 (alternate_use_case) so the buyer can visualize ownership and a second use case.")
 
     # 4. duplicate psychological stage coverage
     stage_counts = Counter(s.psychological_stage for s in slots)

@@ -1,15 +1,19 @@
 """
-ListingForge AI — Inter-module data contracts (Phase 2).
+Etsy Listing AI Studio — Inter-module data contracts.
 
 HARD RULES enforced at this layer:
 - Structured JSON between all modules.
 - Six named BDE stage scores derived from input signals.
-- Exactly 7 image slots; each maps to a DIFFERENT primary buyer uncertainty.
+- Exactly 10 image slots (the full Etsy gallery), each maps to a fixed
+  conversion role AND a DIFFERENT primary buyer uncertainty.
 - Every image prompt carries mandatory lighting / camera / environment /
   composition / product-focus / realism fields plus the conversion clause.
 - Final output always contains: product_category, confidence,
-  buyer_decision_engine, listing_strategy, image_prompts, validation_report,
-  conversion_scores.
+  buyer_decision_engine, listing_strategy, image_prompts, competitor_intelligence,
+  pricing_strategy, validation_report, conversion_scores.
+- The platform is DIGITAL-PRODUCTS-ONLY: every category is an instant-download
+  digital good (printable, planner, template, invitation, cut file, bundle,
+  educational resource, or pattern).
 """
 from __future__ import annotations
 
@@ -22,11 +26,16 @@ CONVERSION_CLAUSE = "Etsy conversion optimized, designed to reduce buyer uncerta
 
 
 class ProductCategory(str, Enum):
-    physical_product = "physical_product"
-    digital_product = "digital_product"
-    print_on_demand = "print_on_demand"
-    gift_personalized = "gift_personalized"
-    saas_tool = "saas_tool"
+    """The eight digital product categories the Digital Product Category
+    Engine recognizes and optimizes for."""
+    printable_art = "printable_art"
+    digital_planner = "digital_planner"
+    template = "template"
+    invitation = "invitation"
+    svg_cut_file = "svg_cut_file"
+    digital_bundle = "digital_bundle"
+    educational_product = "educational_product"
+    pattern = "pattern"
 
 
 class BDEStage(str, Enum):
@@ -57,9 +66,15 @@ class ProductAnalysis(BaseModel):
     materials_or_format: list[str] = Field(default_factory=list)
     key_attributes: list[str] = Field(default_factory=list)
     target_buyer: str
+    who_buys_and_why: str = Field(
+        description="Direct answer to: who is most likely to buy this product and why?")
     buying_occasion: str
+    seasonality: str = Field(default="", description="Peak buying windows, or 'evergreen'.")
     price_tier: str = Field(description="budget | mid | premium")
     competitive_context: str
+    market_positioning: str = Field(
+        default="", description="Where this sits vs the category's typical listings.")
+    emotional_buying_triggers: list[str] = Field(default_factory=list)
     ambiguities: list[str] = Field(default_factory=list)
 
 
@@ -125,8 +140,10 @@ class BDEModelOutput(BaseModel):
     def sequential_ids(cls, v: list[UncertaintyItem]) -> list[UncertaintyItem]:
         for i, u in enumerate(v):
             u.id = i  # normalize to stable sequential ids
-        if len(v) < 5:
-            raise ValueError("Uncertainty map too shallow: at least 5 distinct buyer doubts required.")
+        if len(v) < 10:
+            # the 10-slot Image Strategy Engine needs 10 DISTINCT doubts to claim
+            raise ValueError("Uncertainty map too shallow: at least 10 distinct buyer doubts required "
+                             "(one per Etsy gallery image slot).")
         return v
 
 
@@ -160,9 +177,27 @@ class CategoryClassification(BaseModel):
 class TitleVariant(BaseModel):
     title: str = Field(max_length=140)
     strategy: str
+    is_best: bool = Field(default=False, description="True for exactly the recommended title.")
+
+
+class DescriptionSection(str, Enum):
+    """The mandatory conversion-copy architecture for a digital-product
+    Etsy description, in required reading order."""
+    opening_hook = "opening_hook"
+    buyer_problem = "buyer_problem"
+    emotional_benefit = "emotional_benefit"
+    transformation = "transformation"
+    features = "features"
+    whats_included = "whats_included"
+    file_details = "file_details"
+    instructions = "instructions"
+    compatibility = "compatibility"
+    objection_handling = "objection_handling"
+    call_to_action = "call_to_action"
 
 
 class DescriptionBlock(BaseModel):
+    section: DescriptionSection
     heading: str
     body: str
     bde_stage: BDEStage
@@ -172,8 +207,18 @@ class DescriptionBlock(BaseModel):
 class ListingStrategy(BaseModel):
     primary_keyword: str
     secondary_keywords: list[str]
-    titles: list[TitleVariant] = Field(min_length=3, max_length=5)
+    long_tail_keywords: list[str] = Field(default_factory=list)
+    search_phrases: list[str] = Field(default_factory=list)
+    titles: list[TitleVariant] = Field(
+        min_length=6, max_length=6,
+        description="Exactly 6: the best title (is_best=True) plus 5 alternatives.")
+    title_explanation: str = Field(
+        default="", description="Why the best title beats the 5 alternatives.")
     tags: list[str] = Field(min_length=13, max_length=13)
+    attributes: list[str] = Field(default_factory=list)
+    materials: list[str] = Field(default_factory=list, max_length=13)
+    colors: list[str] = Field(default_factory=list)
+    occasions: list[str] = Field(default_factory=list)
     description_blocks: list[DescriptionBlock]
     price_anchor_strategy: str
     faq_items: list[dict] = Field(default_factory=list)
@@ -184,6 +229,18 @@ class ListingStrategy(BaseModel):
         for t in v:
             if len(t) > 20:
                 raise ValueError(f"Etsy tag over 20 chars: {t!r}")
+        return v
+
+    @field_validator("titles")
+    @classmethod
+    def exactly_one_best(cls, v: list[TitleVariant]) -> list[TitleVariant]:
+        """Normalizes so titles[0] is ALWAYS the best title — every consumer
+        (editor, scoring, exports, Etsy publish) relies on that invariant."""
+        best_idx = next((i for i, t in enumerate(v) if t.is_best), 0)
+        for t in v:
+            t.is_best = False
+        v[0], v[best_idx] = v[best_idx], v[0]
+        v[0].is_best = True
         return v
 
 
@@ -234,8 +291,37 @@ class ImagePrompt(BaseModel):
         return "\n".join(parts)
 
 
+class ImageRole(str, Enum):
+    """The 10 fixed Etsy gallery roles, in mandated slot order (1-10)."""
+    hero = "hero"
+    overview = "overview"
+    value_breakdown = "value_breakdown"
+    lifestyle_mockup = "lifestyle_mockup"
+    alternate_use_case = "alternate_use_case"
+    close_up_detail = "close_up_detail"
+    how_it_works = "how_it_works"
+    sizes_formats_compatibility = "sizes_formats_compatibility"
+    benefits_transformation = "benefits_transformation"
+    brand_cta = "brand_cta"
+
+
+IMAGE_ROLE_BY_SLOT: dict[int, ImageRole] = {
+    1: ImageRole.hero,
+    2: ImageRole.overview,
+    3: ImageRole.value_breakdown,
+    4: ImageRole.lifestyle_mockup,
+    5: ImageRole.alternate_use_case,
+    6: ImageRole.close_up_detail,
+    7: ImageRole.how_it_works,
+    8: ImageRole.sizes_formats_compatibility,
+    9: ImageRole.benefits_transformation,
+    10: ImageRole.brand_cta,
+}
+
+
 class ImageSlot(BaseModel):
-    slot_id: int = Field(ge=1, le=7)
+    slot_id: int = Field(ge=1, le=10)
+    role: ImageRole = Field(description="Fixed conversion role for this slot position.")
     intent: ImageIntent
     psychological_stage: BDEStage
     objective: str = Field(description="The specific buyer uncertainty this slot removes.")
@@ -255,19 +341,23 @@ class ImageSlot(BaseModel):
     def objective_present(self):
         if len(self.objective.strip()) < 10:
             raise ValueError(f"Slot {self.slot_id}: objective missing — aesthetic-only slots are forbidden.")
+        expected = IMAGE_ROLE_BY_SLOT.get(self.slot_id)
+        if expected is not None and self.role != expected:
+            raise ValueError(
+                f"Slot {self.slot_id} must have role {expected.value!r}, got {self.role.value!r}.")
         return self
 
 
 class ImageStrategy(BaseModel):
-    slots: list[ImageSlot] = Field(min_length=7, max_length=7)
+    slots: list[ImageSlot] = Field(min_length=10, max_length=10)
 
     @field_validator("slots")
     @classmethod
     def structural_rules(cls, v: list[ImageSlot]) -> list[ImageSlot]:
-        if sorted(s.slot_id for s in v) != [1, 2, 3, 4, 5, 6, 7]:
-            raise ValueError("Exactly slots 1-7 required, no duplication.")
+        if sorted(s.slot_id for s in v) != list(range(1, 11)):
+            raise ValueError("Exactly slots 1-10 required, no duplication — the full Etsy gallery.")
         primaries = [s.primary_uncertainty_id for s in v]
-        if len(set(primaries)) != 7:
+        if len(set(primaries)) != 10:
             dupes = sorted({p for p in primaries if primaries.count(p) > 1})
             raise ValueError(f"Every slot must map to a DIFFERENT buyer uncertainty; duplicated ids: {dupes}")
         return v
@@ -289,6 +379,54 @@ class ValidationReport(BaseModel):
     attempts: int = Field(ge=1, description="Generation attempts needed to pass.")
     regeneration_feedback: list[str] = Field(
         default_factory=list, description="Feedback sent to the model on failed attempts.")
+
+
+# ---------------------------------------------------------------------------
+# Competitor Intelligence Engine
+# ---------------------------------------------------------------------------
+
+class CompetitorAdvantage(BaseModel):
+    area: str = Field(description="positioning | seo | imagery | value_perception | buyer_communication")
+    how_this_listing_wins: str
+
+
+class CompetitorIntelligence(BaseModel):
+    best_selling_patterns: list[str] = Field(
+        min_length=2, description="What top-performing listings in this category do.")
+    popular_keywords: list[str] = Field(default_factory=list)
+    common_image_styles: list[str] = Field(default_factory=list)
+    pricing_patterns: str
+    customer_expectations: list[str] = Field(default_factory=list)
+    review_language_signals: list[str] = Field(
+        default_factory=list, description="Phrases buyers commonly praise or complain about in this category.")
+    competitor_weaknesses: list[str] = Field(min_length=2)
+    missed_opportunities: list[str] = Field(
+        min_length=2, description="Gaps competitors leave open that this listing can claim.")
+    advantages: list[CompetitorAdvantage] = Field(
+        min_length=3, description="How this listing beats competitors: positioning, SEO, imagery, "
+                                  "value perception, and buyer communication.")
+
+
+# ---------------------------------------------------------------------------
+# Pricing Strategy Engine
+# ---------------------------------------------------------------------------
+
+class PricingStrategy(BaseModel):
+    recommended_price: float = Field(gt=0)
+    price_range_low: float = Field(gt=0)
+    price_range_high: float = Field(gt=0)
+    psychological_pricing_note: str = Field(
+        description="Why this exact price point (e.g. charm pricing, anchor effects).")
+    price_positioning: str = Field(description="budget | mid-market | premium, with reasoning.")
+    bundle_opportunities: list[str] = Field(min_length=1)
+    upsell_ideas: list[str] = Field(min_length=1)
+    premium_version_opportunities: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def range_sane(self):
+        if not (self.price_range_low <= self.recommended_price <= self.price_range_high):
+            raise ValueError("recommended_price must fall within price_range_low/high.")
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -323,7 +461,8 @@ class ConversionScores(BaseModel):
 
 FINAL_OUTPUT_REQUIRED_KEYS = (
     "product_category", "confidence", "buyer_decision_engine",
-    "listing_strategy", "image_prompts", "validation_report", "conversion_scores",
+    "listing_strategy", "image_prompts", "competitor_intelligence",
+    "pricing_strategy", "validation_report", "conversion_scores",
 )
 
 
@@ -334,6 +473,8 @@ class ListingOutput(BaseModel):
     buyer_decision_engine: BDEOutput
     listing_strategy: ListingStrategy
     image_prompts: ImageStrategy
+    competitor_intelligence: CompetitorIntelligence
+    pricing_strategy: PricingStrategy
     validation_report: ValidationReport
     conversion_scores: ConversionScores
     # Supporting context

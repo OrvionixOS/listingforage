@@ -1,14 +1,20 @@
 """
-Stage 5 — Image Strategy Engine + Prompt Generation (Phase 2).
+Stage 5 — Image Strategy Engine + Prompt Generation.
 
-MANDATORY 7-SLOT SYSTEM. Each slot carries: slot_id, intent,
+MANDATORY 10-SLOT SYSTEM — the complete Etsy digital-product gallery. Each
+slot carries a FIXED conversion role (schemas.IMAGE_ROLE_BY_SLOT) plus intent,
 psychological_stage, objective, required_visual_type, prompt_constraints, and
 a structured ImagePrompt whose lighting / camera / environment / composition /
 product-focus / realism fields are hard requirements enforced by schema.
 
-Each slot must claim a DIFFERENT primary buyer uncertainty (schema-enforced).
-The Image Strategy Validator (validator.py) audits the result and this module
-accepts its feedback for regeneration passes.
+Slot roles (fixed order, spec-mandated):
+  1 hero · 2 overview · 3 value_breakdown · 4 lifestyle_mockup ·
+  5 alternate_use_case · 6 close_up_detail · 7 how_it_works ·
+  8 sizes_formats_compatibility · 9 benefits_transformation · 10 brand_cta
+
+Each slot must ALSO claim a DIFFERENT primary buyer uncertainty (schema-
+enforced). The Image Strategy Validator (validator.py) audits the result and
+this module accepts its feedback for regeneration passes.
 """
 from __future__ import annotations
 
@@ -17,60 +23,112 @@ from ..schemas import (BDEOutput, CategoryClassification, ImageStrategy,
 from .llm import structured_call
 
 SLOT_BLUEPRINTS: dict[ProductCategory, str] = {
-    ProductCategory.digital_product: """
-1 CTR/attention hero_macro — single striking asset full bleed, legible at 180px.
-2 CLARITY/interpretation file_grid — every file with count/format/size labels.
-3 TRUST/trust zoom_proof — 100% zoom crop proving resolution (300 DPI callout).
-4 CLARITY/interpretation tiling_demo or spec visual for the top clarity doubt.
-5 CONTEXT/usage_imagination mockup_in_use — files applied in real work.
-6 VALUE/value_justification variant_grid — full variety + per-item math cue.
-7 CONVERSION/final_objection info_card — license / how-it-works / top blocker.""",
-    ProductCategory.physical_product: """
-1 CTR/attention hero_macro — clean high-contrast hero, item fills frame.
-2 CLARITY/interpretation scale_reference — item next to hand/common object or
-  dimension overlay.
-3 TRUST/trust zoom_proof — macro craftsmanship detail.
-4 CONTEXT/usage_imagination lifestyle_scene — real environment.
-5 VALUE/value_justification variant_grid or what's-included flat lay.
-6 TRUST/trust process_shot — maker's hands, studio, proving handmade.
-7 CONVERSION/final_objection info_card — packaging + shipping/care.""",
-    ProductCategory.print_on_demand: """
-1 CTR/attention hero_macro — best-selling variant, model or styled flat.
-2 CLARITY/interpretation size_chart — print placement + sizing overlay.
-3 CONTEXT/usage_imagination lifestyle_scene — wear/use shot matching persona.
-4 VALUE/value_justification variant_grid — all colors/sizes.
-5 TRUST/trust zoom_proof — fabric/print texture close-up, honest.
-6 CLARITY/interpretation comparison_split — artwork detail isolated.
-7 CONVERSION/final_objection info_card — sizing guide + care + fulfillment time.""",
-    ProductCategory.gift_personalized: """
-1 CTR/attention hero_macro — personalization visible with a REAL name.
-2 CLARITY/interpretation info_card — personalization steps (choose→enter→preview→receive).
-3 CONTEXT/usage_imagination lifestyle_scene — gifting moment / occasion setting.
-4 TRUST/trust zoom_proof — personalization quality close-up.
-5 VALUE/value_justification unboxing — gift packaging + everything included.
-6 CLARITY/interpretation variant_grid — font/color/style options.
-7 CONVERSION/final_objection info_card — deadline + proof-approval policy.""",
-    ProductCategory.saas_tool: """
-1 CTR/attention hero_macro — hero UI screenshot with one bold outcome line.
-2 CLARITY/interpretation info_card — access model (duration, seats, delivery).
-3 CONTEXT/usage_imagination mockup_in_use — tool inside a real workflow.
-4 TRUST/trust comparison_split — results/social-proof visual.
-5 VALUE/value_justification variant_grid — feature/plan comparison.
-6 CLARITY/interpretation info_card — 3-step onboarding strip.
-7 CONVERSION/final_objection info_card — refund/access/support policy.""",
+    ProductCategory.printable_art: """
+1 hero (CTR/attention) hero_macro — the print full bleed, colors true, legible at 180px.
+2 overview (CLARITY/interpretation) file_grid — every print/size/format in the download, labeled.
+3 value_breakdown (VALUE/value_justification) variant_grid — sizes included (8x10, 16x20, A4...) with per-size math.
+4 lifestyle_mockup (CONTEXT/usage_imagination) lifestyle_scene — framed and hung in a real, styled room.
+5 alternate_use_case (CONTEXT/usage_imagination) lifestyle_scene — a second room/pairing (nursery vs office, gallery wall grouping).
+6 close_up_detail (TRUST/trust) zoom_proof — 100% zoom crop proving print resolution (300 DPI callout).
+7 how_it_works (CLARITY/interpretation) info_card — download → print → frame steps.
+8 sizes_formats_compatibility (CLARITY/interpretation) size_chart — exact sizes/aspect ratios + file formats (JPG/PDF).
+9 benefits_transformation (VALUE/value_justification) lifestyle_scene — the room transformation this art delivers.
+10 brand_cta (CONVERSION/final_objection) info_card — license terms, shop brand, clear call to action.""",
+    ProductCategory.digital_planner: """
+1 hero (CTR/attention) hero_macro — planner cover/hero spread, bold and legible at 180px.
+2 overview (CLARITY/interpretation) file_grid — every page/section in the planner, labeled and counted.
+3 value_breakdown (VALUE/value_justification) variant_grid — page count, sections, bonus pages with per-item value.
+4 lifestyle_mockup (CONTEXT/usage_imagination) mockup_in_use — planner open on an iPad/GoodNotes, being used.
+5 alternate_use_case (CONTEXT/usage_imagination) mockup_in_use — printed-and-used alternative, or a second use case (work vs personal).
+6 close_up_detail (TRUST/trust) zoom_proof — hyperlink/tab navigation close-up proving real functionality.
+7 how_it_works (CLARITY/interpretation) info_card — import → navigate → use steps (app names explicit).
+8 sizes_formats_compatibility (CLARITY/interpretation) info_card — supported apps (GoodNotes/Notability/print), file format.
+9 benefits_transformation (VALUE/value_justification) info_card — the organization/time-saved transformation.
+10 brand_cta (CONVERSION/final_objection) info_card — license, refill policy, shop brand + call to action.""",
+    ProductCategory.template: """
+1 hero (CTR/attention) hero_macro — best template design, full bleed, legible at 180px.
+2 overview (CLARITY/interpretation) file_grid — every template/slide/variant included, labeled.
+3 value_breakdown (VALUE/value_justification) variant_grid — count of templates/color variations with per-item math.
+4 lifestyle_mockup (CONTEXT/usage_imagination) mockup_in_use — template shown customized inside the actual tool (Canva UI).
+5 alternate_use_case (CONTEXT/usage_imagination) mockup_in_use — a second platform/use (Instagram vs print, or a different niche).
+6 close_up_detail (TRUST/trust) zoom_proof — close-up of typography/layout quality proving polish.
+7 how_it_works (CLARITY/interpretation) info_card — open link → edit text/colors → download steps.
+8 sizes_formats_compatibility (CLARITY/interpretation) info_card — tool required (Canva free/pro), fonts, dimensions.
+9 benefits_transformation (VALUE/value_justification) comparison_split — before/after: generic vs this template's professional result.
+10 brand_cta (CONVERSION/final_objection) info_card — commercial license, shop brand, call to action.""",
+    ProductCategory.invitation: """
+1 hero (CTR/attention) hero_macro — invitation with a REAL sample name/date, legible at 180px.
+2 overview (CLARITY/interpretation) file_grid — every included piece (invite, RSVP, thank-you card), labeled.
+3 value_breakdown (VALUE/value_justification) variant_grid — matching suite pieces included, per-item value.
+4 lifestyle_mockup (CONTEXT/usage_imagination) lifestyle_scene — invitation in a real gifting/event-planning moment.
+5 alternate_use_case (CONTEXT/usage_imagination) variant_grid — color/style variant options for a different event tone.
+6 close_up_detail (TRUST/trust) zoom_proof — personalization/print-quality close-up.
+7 how_it_works (CLARITY/interpretation) info_card — choose → enter details → preview → receive/print steps.
+8 sizes_formats_compatibility (CLARITY/interpretation) size_chart — print sizes, editing platform (Canva/Corjl), formats.
+9 benefits_transformation (VALUE/value_justification) lifestyle_scene — the event feeling/impression this creates.
+10 brand_cta (CONVERSION/final_objection) info_card — deadline + proof-approval policy, shop brand, call to action.""",
+    ProductCategory.svg_cut_file: """
+1 hero (CTR/attention) hero_macro — the cut design shown clean and bold, legible at 180px.
+2 overview (CLARITY/interpretation) file_grid — every file format included (svg/dxf/eps/png), labeled.
+3 value_breakdown (VALUE/value_justification) variant_grid — design count/variations with per-item math.
+4 lifestyle_mockup (CONTEXT/usage_imagination) mockup_in_use — design cut and applied to a real product (shirt, tumbler, sign).
+5 alternate_use_case (CONTEXT/usage_imagination) mockup_in_use — a second craft application (vinyl decal vs laser wood).
+6 close_up_detail (TRUST/trust) zoom_proof — clean-cut-edge close-up proving line quality.
+7 how_it_works (CLARITY/interpretation) info_card — open in software → resize → cut steps (app names explicit).
+8 sizes_formats_compatibility (CLARITY/interpretation) info_card — Cricut Design Space/Silhouette Studio/laser compatibility, formats.
+9 benefits_transformation (VALUE/value_justification) lifestyle_scene — the finished craft project transformation.
+10 brand_cta (CONVERSION/final_objection) info_card — commercial license, shop brand, call to action.""",
+    ProductCategory.digital_bundle: """
+1 hero (CTR/attention) hero_macro — best single asset from the bundle, legible at 180px.
+2 overview (CLARITY/interpretation) file_grid — full contents grid, every item counted and labeled.
+3 value_breakdown (VALUE/value_justification) variant_grid — "N items for $X = $Y each" explicit per-item math.
+4 lifestyle_mockup (CONTEXT/usage_imagination) mockup_in_use — bundle assets used together in one real project.
+5 alternate_use_case (CONTEXT/usage_imagination) mockup_in_use — a different project using different bundle assets.
+6 close_up_detail (TRUST/trust) zoom_proof — quality close-up on a representative asset.
+7 how_it_works (CLARITY/interpretation) info_card — download → unzip → use in [software] steps.
+8 sizes_formats_compatibility (CLARITY/interpretation) info_card — all formats included, software compatibility.
+9 benefits_transformation (VALUE/value_justification) comparison_split — bundle savings vs buying items individually.
+10 brand_cta (CONVERSION/final_objection) info_card — commercial license, shop brand, call to action.""",
+    ProductCategory.educational_product: """
+1 hero (CTR/attention) hero_macro — the worksheet/resource cover page, legible at 180px.
+2 overview (CLARITY/interpretation) file_grid — every worksheet/page included, labeled by topic.
+3 value_breakdown (VALUE/value_justification) variant_grid — page/activity count, answer keys included, per-item value.
+4 lifestyle_mockup (CONTEXT/usage_imagination) lifestyle_scene — resource in use at a desk/classroom table.
+5 alternate_use_case (CONTEXT/usage_imagination) lifestyle_scene — home-school vs classroom use, or a second grade/age variant.
+6 close_up_detail (TRUST/trust) zoom_proof — close-up proving print clarity and layout quality.
+7 how_it_works (CLARITY/interpretation) info_card — download → print → use steps.
+8 sizes_formats_compatibility (CLARITY/interpretation) info_card — grade/age range, format (PDF), answer key inclusion.
+9 benefits_transformation (VALUE/value_justification) info_card — the specific learning outcome this delivers.
+10 brand_cta (CONVERSION/final_objection) info_card — curriculum alignment note, shop brand, call to action.""",
+    ProductCategory.pattern: """
+1 hero (CTR/attention) hero_macro — the finished make, clean and bold, legible at 180px.
+2 overview (CLARITY/interpretation) file_grid — every pattern piece/page included, labeled.
+3 value_breakdown (VALUE/value_justification) variant_grid — sizes/variations included with per-item value.
+4 lifestyle_mockup (CONTEXT/usage_imagination) lifestyle_scene — the finished project worn/displayed in real use.
+5 alternate_use_case (CONTEXT/usage_imagination) variant_grid — a color/yarn/fabric variation of the same pattern.
+6 close_up_detail (TRUST/trust) zoom_proof — stitch/seam close-up proving finished quality.
+7 how_it_works (CLARITY/interpretation) info_card — skill level → materials → construction steps overview.
+8 sizes_formats_compatibility (CLARITY/interpretation) size_chart — sizes/gauge, yardage/notions needed, file format.
+9 benefits_transformation (VALUE/value_justification) comparison_split — raw materials vs finished, professional-looking result.
+10 brand_cta (CONVERSION/final_objection) info_card — skill-level honesty note, shop brand, call to action.""",
 }
 
-SYSTEM_TEMPLATE = """You are the Image Strategy Engine of ListingForge AI — a
-buyer decision simulation engine. Etsy gives ten image slots; the first seven
-do all conversion work. Design EXACTLY 7 slots. Every slot is a conversion
-instrument. Decoration is forbidden.
+SYSTEM_TEMPLATE = """You are the Image Strategy Engine of Etsy Listing AI
+Studio — a product photographer, graphic designer, and buyer decision
+simulation engine in one. Etsy gives ten image slots. Design the COMPLETE
+gallery: EXACTLY 10 slots, one per fixed conversion role. Every slot is a
+conversion instrument. Decoration is forbidden.
 
 HARD RULES:
-- slot_id 1-7 exactly once. Slot 1 is always the search thumbnail (intent CTR,
-  stage attention, legible at 180px). Slot 7 always kills the top remaining
-  final objection (intent CONVERSION).
+- slot_id 1-10 exactly once, each with its FIXED role in this exact order:
+  1=hero 2=overview 3=value_breakdown 4=lifestyle_mockup 5=alternate_use_case
+  6=close_up_detail 7=how_it_works 8=sizes_formats_compatibility
+  9=benefits_transformation 10=brand_cta.
+  Slot 1 (hero) is always the search thumbnail (intent CTR, stage attention,
+  legible at 180px). Slot 10 (brand_cta) always closes the final objection and
+  reinforces brand trust (intent CONVERSION).
 - Each slot claims a DIFFERENT primary_uncertainty_id from the indexed
-  uncertainty map — 7 slots, 7 different doubts, highest severities first.
+  uncertainty map — 10 slots, 10 different doubts, highest severities first.
   secondary_uncertainty_ids may overlap.
 - objective: state the doubt in plain language (paraphrase the map item).
 - required_visual_type: one concrete format (hero_macro, file_grid, zoom_proof,
@@ -82,10 +140,11 @@ HARD RULES:
   * at least one TRUST-intent slot with a quality-proof visual
   * at least one slot resolving scale/what-you-get clarity
     (scale_reference, file_grid, size_chart, or dimension-overlay visual)
-  * at least one usage demonstration (lifestyle_scene or mockup_in_use)
-  * no psychological stage covered by more than 2 slots
-  * at least 4 distinct intents and at least 4 distinct visual types across
-    the 7 slots
+  * at least two usage demonstrations (lifestyle_scene or mockup_in_use) —
+    slots 4 and 5 (lifestyle_mockup, alternate_use_case) satisfy this
+  * no psychological stage covered by more than 3 slots
+  * at least 5 distinct intents and at least 6 distinct visual types across
+    the 10 slots
 
 PROMPT REQUIREMENTS (every prompt object, all fields mandatory):
 - subject: the exact scene, specific to THIS product's materials and colors.
@@ -105,8 +164,8 @@ Vague or artistic-only language ("beautiful", "stunning composition") is
 rejected. Every prompt is automatically suffixed with the clause
 "Etsy conversion optimized, designed to reduce buyer uncertainty".
 
-CATEGORY BLUEPRINT (adapt to this product; reorder slots 2-6 when the
-uncertainty map demands):
+CATEGORY BLUEPRINT (roles/order are FIXED — adapt required_visual_type,
+objective, and prompt content to this specific product within each role):
 {blueprint}"""
 
 
@@ -137,9 +196,9 @@ def run(analysis: ProductAnalysis, bde: BDEOutput,
             "You MUST fix every one of these failures:\n- "
             + "\n- ".join(regeneration_feedback) + "\n"
         )
-    content += "\nDesign the 7-slot image strategy."
+    content += "\nDesign the complete 10-slot Etsy gallery image strategy."
 
     return structured_call(
         SYSTEM_TEMPLATE.format(blueprint=blueprint),
-        content, ImageStrategy, max_tokens=12000, temperature=0.6,
+        content, ImageStrategy, max_tokens=16000, temperature=0.6,
     )

@@ -24,45 +24,68 @@ from .signals import InputSignals
 
 settings = get_settings()
 
-CATEGORY_GUIDE = """CATEGORIES AND THEIR STRUCTURAL CONSEQUENCES:
+CATEGORY_GUIDE = """DIGITAL PRODUCT CATEGORIES AND THEIR STRUCTURAL CONSEQUENCES
+(this platform sells DIGITAL PRODUCTS ONLY — every category below is an
+instant-download good):
 
-- physical_product: handmade/sourced tangible goods shipped to the buyer.
-  Dimensions and materials up front; shipping time is a final-objection
-  priority; craftsmanship close-ups are trust-critical.
+- printable_art: wall art, nursery prints, quote prints, minimalist art,
+  gallery-wall sets. Room placement and interior style dominate SEO; size
+  guides (what physical print sizes the file supports) are interpretation-
+  critical; decor keywords drive discovery; framed-in-room mockups are
+  usage-imagination critical.
 
-- digital_product: instant-download files (printables, templates, digital
-  paper, planners, SVGs). "INSTANT DOWNLOAD" disambiguation is
-  interpretation-critical; formats/sizes/compatibility explicit; what's-included
-  grid is value-critical; licensing dominates final objections.
+- digital_planner: budget/wedding/fitness/productivity planners for
+  GoodNotes/Notability/iPad or print. Organization benefits and time-saving
+  dominate emotional drivers; hyperlinked-navigation clarity is
+  interpretation-critical; "lifestyle transformation" framing drives value
+  justification; app-compatibility is a final-objection priority.
 
-- print_on_demand: designs fulfilled by a POD partner (shirts, mugs, posters).
-  Size charts and print placement are final-objection priorities; mockup
-  honesty is a trust issue; fulfillment time must be disclosed.
+- template: Canva/business/resume/social-media templates. Professional
+  outcome and time-saved dominate; "how easy to customize" is
+  interpretation-critical; software/tool compatibility (Canva free vs pro,
+  fonts required) is a top final objection.
 
-- gift_personalized: items whose PRIMARY purchase driver is gifting or
-  customization. Personalization workflow clarity is interpretation-critical;
-  occasion keywords dominate SEO; deadline + typo fears are top objections;
-  recipient-reaction imagery drives usage imagination.
+- invitation: wedding/birthday/event invitations and evites. Occasion and
+  personalization workflow dominate; deadline pressure and typo/proof-approval
+  fears are top final objections; recipient-reaction imagery drives usage
+  imagination; RSVP/editing method (Canva, Corjl, print-at-home) must be explicit.
 
-- saas_tool: software subscriptions/tools sold via Etsy. Access model and
-  duration clarity dominate; screenshots replace photography; refund/access
-  objections dominate."""
+- svg_cut_file: Cricut/Silhouette/laser cut files and craft designs.
+  Software/machine compatibility (Cricut Design Space, Silhouette Studio,
+  Glowforge) is interpretation-critical; included file formats (svg, dxf, eps,
+  png) are value-critical; craft-use imagery (finished shirt, tumbler, sign)
+  drives usage imagination.
 
-SYSTEM = f"""You are the Category Classification Engine of ListingForge AI.
-Classify the product into exactly one category using MULTIPLE signal types,
-never keywords alone.
+- digital_bundle: clipart bundles, design packs, mega collections. Perceived
+  value and per-item math ("47 designs for $9 = $0.19 each") dominate value
+  justification; quantity and variety visuals are value-critical; bundle
+  savings vs buying individually is the price anchor.
+
+- educational_product: worksheets, flashcards, learning resources for
+  parents/teachers/homeschoolers. Learning outcomes and grade/age-level fit
+  dominate; parent/teacher time-saved is an emotional driver; curriculum
+  alignment and answer-key inclusion are top final objections.
+
+- pattern: sewing/crochet/knitting/craft patterns. Skill level, materials
+  needed, and the finished result dominate; gauge/measurement clarity is
+  interpretation-critical; finished-project photography is trust- and
+  usage-imagination-critical; yardage/notions list is a final objection."""
+
+SYSTEM = f"""You are the Digital Product Category Classification Engine of
+Etsy Listing AI Studio. Classify the product into exactly one of the eight
+digital product categories using MULTIPLE signal types, never keywords alone.
 
 {CATEGORY_GUIDE}
 
 SIGNALS YOU WILL RECEIVE:
 1. Lexical: per-category term-hit counts measured deterministically.
-2. Structural: spec density, image count, price tier, personalization language.
+2. Structural: spec density, image count, price tier, detected file formats.
 3. Behavioral: the BDE's dominant purchase scenario and emotional drivers —
    what the buyer is actually doing, which outranks what the product literally is.
 
 RULES:
 - Weigh all signal types; list which you used in signals_considered.
-- Cross-category products (e.g. a personalized digital portrait) classify by
+- Cross-category products (e.g. a printable wedding invitation) classify by
   the DOMINANT purchase driver in the BDE scenario.
 - confidence must be calibrated: strong multi-signal agreement -> 0.85+,
   mixed signals -> 0.5-0.7, genuine ambiguity -> below 0.5. Never report high
@@ -70,19 +93,20 @@ RULES:
 - listing_structure_implications: 4-7 concrete consequences for THIS product's
   titles, tags, images, and description order."""
 
-FALLBACK_SYSTEM = f"""You are the Category Classification Engine of ListingForge
-AI running a LOW-CONFIDENCE FALLBACK pass. A first pass could not decide
-confidently between categories.
+FALLBACK_SYSTEM = f"""You are the Digital Product Category Classification Engine
+of Etsy Listing AI Studio running a LOW-CONFIDENCE FALLBACK pass. A first pass
+could not decide confidently between categories.
 
 {CATEGORY_GUIDE}
 
 FALLBACK RULE — decide by conversion relevance, not literalness:
 Pick the category whose listing STRUCTURE (image slots, description order,
 objection handling) best serves the dominant purchase scenario and removes the
-most severe buyer uncertainties. Example: a "custom pet portrait PDF" is
-literally a digital product, but if the scenario is gift-buying, the
-gift_personalized structure (occasion SEO, deadline objections,
-recipient-reaction imagery) converts better — choose it.
+most severe buyer uncertainties. Example: a printable birthday card PDF is
+close to both printable_art and invitation, but if the scenario is
+event-gifting with a name/date to personalize, the invitation structure
+(deadline objections, personalization workflow, occasion SEO) converts
+better — choose it.
 
 You MUST fill fallback_reasoning: name the literal candidate, the chosen
 conversion-relevant category, and why the chosen structure wins for this

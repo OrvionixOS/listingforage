@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 
 class Settings(BaseModel):
-    app_name: str = "ListingForge AI"
+    app_name: str = "Etsy Listing AI Studio"
     env: str = os.getenv("LF_ENV", "development")
     database_url: str = os.getenv("DATABASE_URL", "sqlite:///./listingforge.db")
     jwt_secret: str = os.getenv("JWT_SECRET", "dev-secret-change-in-production")

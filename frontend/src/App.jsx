@@ -32,8 +32,8 @@ export default function App() {
   return (
     <div className="shell">
       <aside className="sidebar">
-        <div className="wordmark">Listing<em>Forge</em></div>
-        <div className="tagline">Conversion Intelligence</div>
+        <div className="wordmark">Etsy Listing <em>AI Studio</em></div>
+        <div className="tagline">Digital Product Listing Engine</div>
         <button className={`nav-item ${view.name === "dashboard" ? "active" : ""}`}
           onClick={() => nav("dashboard")}>Listings</button>
         <button className={`nav-item ${view.name === "new" ? "active" : ""}`}
