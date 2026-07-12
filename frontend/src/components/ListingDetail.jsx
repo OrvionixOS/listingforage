@@ -496,11 +496,40 @@ function PublishPanel({ listingId }) {
 function MarketTab({ competitor, pricing }) {
   const c = competitor || {};
   const p = pricing || {};
+  const snap = c.market_snapshot || {};
+  const live = c.data_source === "live_etsy_data" && snap.listings_analyzed > 0;
   return (
     <>
       <div className="card">
         <h2>How this listing beats competitors</h2>
-        <p className="sub">AI-modeled competitor intelligence for this product's category.</p>
+        <p className="sub" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {live
+            ? <span className="pill green">live Etsy data · {snap.listings_analyzed} listings analyzed</span>
+            : <span className="pill">category modeling — connect ETSY_API_KEY for live market data</span>}
+          {live && snap.price_median != null && (
+            <span className="mono sub">
+              measured prices ${Number(snap.price_min).toFixed(2)}–${Number(snap.price_max).toFixed(2)},
+              median ${Number(snap.price_median).toFixed(2)}
+            </span>
+          )}
+        </p>
+        {live && (snap.top_title_terms || []).length > 0 && (
+          <>
+            <p className="sub" style={{ marginTop: 10, fontWeight: 600 }}>
+              Terms the top results converge on (term, listings using it)</p>
+            <div style={{ marginTop: 6 }}>
+              {snap.top_title_terms.map((t, i) => <span className="tag-chip" key={i}>{t}</span>)}
+            </div>
+          </>
+        )}
+        {live && (snap.sample_titles || []).length > 0 && (
+          <>
+            <p className="sub" style={{ marginTop: 10, fontWeight: 600 }}>Competing titles right now</p>
+            {snap.sample_titles.map((t, i) => (
+              <p className="sub mono" key={i} style={{ fontSize: 12, marginTop: 4 }}>“{t}”</p>
+            ))}
+          </>
+        )}
         <div style={{ marginTop: 10 }}>
           {(c.advantages || []).map((a, i) => (
             <div className="u-item" key={i}>

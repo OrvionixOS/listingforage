@@ -70,13 +70,17 @@ Every slot has a fixed conversion role, in this exact order:
 | 9 | Benefits/transformation | The before/after outcome |
 | 10 | Brand + CTA | License terms, brand reinforcement, call to action |
 
-## Competitor Intelligence Engine
+## Competitor Intelligence Engine — grounded in live Etsy data
 
-Models the current Etsy marketplace for the product's category: best-selling patterns, popular keywords, common image styles, pricing patterns, customer expectations, review language, and competitor weaknesses — then produces a concrete "how this listing beats competitors" plan across positioning, SEO, imagery, value perception, and buyer communication (`pipeline/competitor_intelligence.py`).
+At generation time, the engine runs a **real Etsy search** for the listing's primary keyword (`etsy/market_research.py`, public-scope API — needs only `ETSY_API_KEY`, no shop OAuth) and reduces the top 25 active listings to a deterministic **MarketSnapshot**: measured price range/median, terms the top titles converge on (with counts), most-used tags, average favorites, and sample competing titles. That snapshot is injected into the model prompt as ground truth — pricing patterns must use the measured numbers, popular keywords must come from the measured terms, weaknesses must reference what the sampled titles actually do — and stored on the output so every claim is auditable.
+
+The result covers best-selling patterns, popular keywords, common image styles, pricing patterns, customer expectations, review language, competitor weaknesses, missed opportunities, and a concrete "how this listing beats competitors" plan across positioning, SEO, imagery, value perception, and buyer communication (`pipeline/competitor_intelligence.py`).
+
+**Provenance is engine-enforced:** `data_source` is set to `live_etsy_data` or `model_knowledge` from what actually happened (never model-claimed), and the UI labels each. No API key, a network failure, or an empty result set degrades to category-convention reasoning — it never kills the pipeline and never presents modeled numbers as measured ones.
 
 ## Pricing Strategy Engine
 
-Recommends a price point with psychological-pricing rationale, plus bundle opportunities, upsell ideas, and premium-version opportunities — grounded in the product's category, value density, and the BDE's value-justification findings (`pipeline/pricing_strategy.py`).
+Recommends a price point with psychological-pricing rationale, plus bundle opportunities, upsell ideas, and premium-version opportunities — grounded in the product's category, value density, the BDE's value-justification findings, and the **measured live-market price distribution** from the Competitor Intelligence step: the model must position the price deliberately against the real median (undercut, match, or premium) and say which move it's making (`pipeline/pricing_strategy.py`).
 
 ## Full pipeline enforcement
 
@@ -150,7 +154,7 @@ Open the app, create an account (free tier: 3 generations/month), create a listi
 | `LF_FREE_LISTINGS` / `LF_PRO_LISTINGS` | quota tuning | 3 / 100 |
 | `LF_IMAGE_PROVIDER` | `auto` (default), `local_studio`, or `fal` |
 | `FAL_KEY` | fal.ai key — enables production image generation |
-| `ETSY_API_KEY` | Etsy app keystring (OAuth client id) |
+| `ETSY_API_KEY` | Etsy app keystring — enables live market research at generation time AND shop OAuth publishing |
 | `ETSY_REDIRECT_URI` | OAuth callback, e.g. `https://yourhost/api/etsy/callback` |
 
 ## Production checklist

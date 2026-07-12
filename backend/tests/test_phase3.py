@@ -166,6 +166,31 @@ def _connected(db, user):
     return conn
 
 
+def test_market_snapshot_via_fake_etsy():
+    """fetch_market_snapshot end-to-end against the fake Etsy API: public
+    keystring-only search, real aggregation, honest no-key fallback."""
+    from app.etsy.market_research import fetch_market_snapshot
+
+    fake = FakeTransport()
+    snap = fetch_market_snapshot("gold foil paper",
+                                 client=EtsyClient(api_key="key_test", transport=fake))
+    assert snap.ok and snap.listings_analyzed == 6
+    assert snap.price_median is not None and snap.price_min < snap.price_max
+    assert snap.sample_titles and "gold foil paper" in snap.sample_titles[0]
+    assert any("/listings/active" in url for _, url in fake.calls)
+
+    no_key = fetch_market_snapshot("x", client=EtsyClient(api_key="", transport=fake))
+    assert not no_key.ok and "ETSY_API_KEY" in no_key.error
+
+    class ExplodingTransport:
+        def request(self, *a, **k):
+            raise RuntimeError("network down")
+    dead = fetch_market_snapshot("x", client=EtsyClient(api_key="k", transport=ExplodingTransport()))
+    assert not dead.ok and "fetch failed" in dead.error
+    print(f"PASS market snapshot via Etsy API: {snap.listings_analyzed} listings, "
+          f"median ${snap.price_median:.2f}; no-key and network failures degrade honestly")
+
+
 def test_publish_gate_blocks():
     output = make_output()
     gate = pre_publish_gate(output, images=[], taxonomy_id=2078)
@@ -306,6 +331,7 @@ if __name__ == "__main__":
     test_prompt_compilation()
     test_generation_and_orchestration()
     test_version_history_on_regenerate()
+    test_market_snapshot_via_fake_etsy()
     test_publish_gate_blocks()
     test_full_publish_flow()
     test_payload_is_always_digital()

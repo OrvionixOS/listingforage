@@ -146,6 +146,17 @@ class EtsyClient:
             params={"keywords": keywords, "limit": limit, "sort_on": "score"})
         return data.get("results", [])
 
+    def search_active_public(self, keywords: str, limit: int = 25) -> list[dict]:
+        """Active-listing search with ONLY the app keystring — no OAuth token.
+        Etsy's /listings/active endpoint is public-scope, so generation-time
+        market research works for every user once ETSY_API_KEY is configured,
+        even before any shop is connected."""
+        data = self.transport.request(
+            "GET", f"{API}/listings/active",
+            headers={"x-api-key": self.api_key},
+            params={"keywords": keywords, "limit": limit, "sort_on": "score"})
+        return data.get("results", [])
+
 
 def token_expired(expires_at) -> bool:
     if expires_at is None:
