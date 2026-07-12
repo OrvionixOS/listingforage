@@ -6,7 +6,8 @@ export default function EditorTab({ listingId, output, price }) {
   const [title, setTitle] = useState(ls.titles[0].title);
   const [tags, setTags] = useState(ls.tags.join(", "));
   const [blocks, setBlocks] = useState(ls.description_blocks.map((b) => ({ ...b })));
-  const [materials, setMaterials] = useState(output.product_analysis.materials_or_format.join(", "));
+  const [materials, setMaterials] = useState(
+    (ls.materials?.length ? ls.materials : output.product_analysis.materials_or_format).join(", "));
   const [priceVal, setPriceVal] = useState(price ?? "");
   const [scores, setScores] = useState(null);
   const [err, setErr] = useState("");

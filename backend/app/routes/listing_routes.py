@@ -237,9 +237,11 @@ def export_listing(listing_id: str, fmt: str,
     if r.status != "complete" or not r.output_json:
         raise HTTPException(409, "Listing generation is not complete.")
     formats = r.output_json.get("export_formats", {})
-    key = {"etsy": "etsy_paste_ready", "csv": "csv_row", "images": "image_brief", "scorecard": "scorecard"}.get(fmt)
+    key = {"etsy": "etsy_paste_ready", "csv": "csv_row", "images": "image_brief",
+          "scorecard": "scorecard", "competitor": "competitor_intelligence_brief",
+          "pricing": "pricing_strategy_brief"}.get(fmt)
     if key is None or key not in formats:
-        raise HTTPException(404, f"Unknown export format '{fmt}'. Use: etsy, csv, images, scorecard.")
+        raise HTTPException(404, f"Unknown export format '{fmt}'. Use: etsy, csv, images, scorecard, competitor, pricing.")
     return formats[key]
 
 

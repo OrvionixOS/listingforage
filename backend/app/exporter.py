@@ -87,9 +87,9 @@ def pdf_report(db: Session, listing: Listing) -> bytes:
     # Cover
     bg()
     c.setFillColor(GOLD); c.setFont("Times-Bold", 30)
-    c.drawString(0.9 * inch, H - 1.6 * inch, "ListingForge AI")
+    c.drawString(0.9 * inch, H - 1.6 * inch, "Etsy Listing AI Studio")
     c.setFillColor(IVORY); c.setFont("Helvetica", 11)
-    c.drawString(0.9 * inch, H - 1.95 * inch, "CONVERSION INTELLIGENCE REPORT")
+    c.drawString(0.9 * inch, H - 1.95 * inch, "DIGITAL PRODUCT LISTING REPORT")
     y = para(ls.titles[0].title, H - 2.6 * inch, size=15, color=IVORY, font="Times-Bold", max_chars=60)
     sc = output.conversion_scores
     y -= 18
@@ -124,9 +124,22 @@ def pdf_report(db: Session, listing: Listing) -> bytes:
                     key=lambda x: -x.severity)[:6]:
         y = para(f"[sev {u.severity}] {u.uncertainty}", y) - 2
 
+    # Market intelligence + pricing page
+    c.showPage(); bg()
+    ci = output.competitor_intelligence
+    ps = output.pricing_strategy
+    y = h1("Market intelligence & pricing", H - 1.1 * inch)
+    y = para(f"Recommended price: ${ps.recommended_price:.2f} "
+             f"(range ${ps.price_range_low:.2f}-${ps.price_range_high:.2f}) — {ps.price_positioning}",
+             y, size=11, color=GOLD, font="Helvetica-Bold")
+    y = para(ps.psychological_pricing_note, y) - 8
+    y = para("HOW THIS LISTING BEATS COMPETITORS", y, size=11, color=GOLD, font="Helvetica-Bold")
+    for a in ci.advantages[:5]:
+        y = para(f"[{a.area}] {a.how_this_listing_wins}", y) - 2
+
     # Image system page
     c.showPage(); bg()
-    y = h1("7-image conversion system", H - 1.1 * inch)
+    y = h1("10-image Etsy gallery", H - 1.1 * inch)
     images = (db.query(ListingImage)
               .filter(ListingImage.listing_id == listing.id,
                       ListingImage.superseded.is_(False))
@@ -134,9 +147,9 @@ def pdf_report(db: Session, listing: Listing) -> bytes:
     slot_by_id = {s.slot_id: s for s in output.image_prompts.slots}
     for img in images:
         s = slot_by_id.get(img.slot_id)
-        y = para(f"#{img.display_order} — {s.required_visual_type if s else ''} "
-                 f"(pixel score {img.validation_score}/100)", y, size=11, color=GOLD,
-                 font="Helvetica-Bold")
+        y = para(f"#{img.display_order} — {s.role.value if s else ''} / "
+                 f"{s.required_visual_type if s else ''} (pixel score {img.validation_score}/100)",
+                 y, size=11, color=GOLD, font="Helvetica-Bold")
         if s:
             y = para(s.objective, y) - 6
 

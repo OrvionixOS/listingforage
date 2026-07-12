@@ -1,4 +1,4 @@
-# ListingForge AI — Deploy on Replit (iPad workflow)
+# Etsy Listing AI Studio — Deploy on Replit (iPad workflow)
 
 No terminal on your machine needed. Everything below runs in Replit's Shell tab in Safari.
 
@@ -35,7 +35,7 @@ Replit opens a web preview. That URL is your live app.
 
 ## 5. First run
 - Sign up with any email + password (creates your account)
-- New listing → fill in a product → watch the 11-step pipeline
+- New listing → upload your digital product → watch the full pipeline
 - Without `FAL_KEY` it uses the local renderer (real pixels, no cost) — perfect for testing
 
 ## Making it permanent

@@ -1,5 +1,5 @@
 """
-ListingForge AI — pipeline test suite (no API key required).
+Etsy Listing AI Studio — pipeline test suite (no API key required).
 
 Covers:
   - deterministic signal extraction
@@ -32,9 +32,14 @@ def make_analysis() -> S.ProductAnalysis:
         materials_or_format=["JPG", "12x12 in", "300 DPI"],
         key_attributes=["seamless tiling", "foil look", "commercial use"],
         target_buyer="Wedding stationery designers needing premium gold backgrounds.",
+        who_buys_and_why="Wedding stationery designers who need premium gold backgrounds "
+                         "fast, because commissioning custom textures is slow and expensive.",
         buying_occasion="Business use for client invitation suites.",
+        seasonality="Peaks in engagement/wedding-planning season (Nov-Mar).",
         price_tier="mid",
         competitive_context="Hundreds of gold papers; most repeat visibly when tiled.",
+        market_positioning="Mid-tier bundle vs single-texture budget listings.",
+        emotional_buying_triggers=["Wants client work to look expensive", "Time pressure before a deadline"],
         ambiguities=["No tiling proof", "License unstated", "PNG availability unclear"],
     )
 
@@ -62,6 +67,9 @@ def make_bde() -> S.BDEOutput:
             S.UncertaintyItem(stage="value_justification", uncertainty="How different are the 12 textures?", severity=3, resolvable_by=["image"]),
             S.UncertaintyItem(stage="usage_imagination", uncertainty="Would these suit an elegant wedding suite?", severity=3, resolvable_by=["image"]),
             S.UncertaintyItem(stage="attention", uncertainty="Is this pack distinct from cheaper lookalikes?", severity=3, resolvable_by=["image"]),
+            S.UncertaintyItem(stage="usage_imagination", uncertainty="Could these work for branding beyond weddings?", severity=2, resolvable_by=["image"]),
+            S.UncertaintyItem(stage="interpretation", uncertainty="What exact file formats are included?", severity=4, resolvable_by=["image", "description"]),
+            S.UncertaintyItem(stage="final_objection", uncertainty="Which apps/software will open these files?", severity=3, resolvable_by=["image", "faq"]),
         ],
         missing_information_gaps=["License", "PNG availability"],
         trust_gap_analysis=[
@@ -99,7 +107,7 @@ def make_prompt(subject: str, overlays=None) -> S.ImagePrompt:
 
 def make_slot(sid, intent, stage, objective, vtype, primary) -> S.ImageSlot:
     return S.ImageSlot(
-        slot_id=sid, intent=intent, psychological_stage=stage,
+        slot_id=sid, role=S.IMAGE_ROLE_BY_SLOT[sid], intent=intent, psychological_stage=stage,
         objective=objective, required_visual_type=vtype,
         prompt_constraints=["legible at 180px", "no stock-render look"],
         prompt=make_prompt(f"gold texture scene for slot {sid}"),
@@ -111,11 +119,14 @@ def make_valid_strategy() -> S.ImageStrategy:
     return S.ImageStrategy(slots=[
         make_slot(1, "CTR", "attention", "Distinct from cheaper lookalike gold papers at thumbnail scale", "hero_macro", 6),
         make_slot(2, "CLARITY", "interpretation", "Kills digital-vs-physical doubt: shows exactly what files arrive", "file_grid", 0),
-        make_slot(3, "TRUST", "trust", "Proves print quality at 100 percent zoom, no pixelation", "zoom_proof", 2),
-        make_slot(4, "CLARITY", "interpretation", "Demonstrates the textures tile seamlessly with no repeat lines", "tiling_demo", 3),
-        make_slot(5, "CONTEXT", "usage_imagination", "Shows textures suiting an elegant wedding suite in real client work", "mockup_in_use", 5),
-        make_slot(6, "VALUE", "value_justification", "Shows how different the 12 textures are, justifying pack price", "variant_grid", 4),
-        make_slot(7, "CONVERSION", "final_objection", "Removes the commercial license blocker for business buyers", "info_card", 1),
+        make_slot(3, "VALUE", "value_justification", "Shows how different the 12 textures are, justifying pack price", "variant_grid", 4),
+        make_slot(4, "CONTEXT", "usage_imagination", "Shows textures suiting an elegant wedding suite in real client work", "mockup_in_use", 5),
+        make_slot(5, "CONTEXT", "usage_imagination", "Shows these working for branding beyond weddings", "lifestyle_scene", 7),
+        make_slot(6, "TRUST", "trust", "Proves print quality at 100 percent zoom, no pixelation", "zoom_proof", 2),
+        make_slot(7, "CLARITY", "interpretation", "Demonstrates the textures tile seamlessly with no repeat lines", "tiling_demo", 3),
+        make_slot(8, "CLARITY", "interpretation", "Shows exact file formats included", "info_card", 8),
+        make_slot(9, "VALUE", "value_justification", "Shows the finished-project transformation these enable", "comparison_split", 9),
+        make_slot(10, "CONVERSION", "final_objection", "Removes the commercial license blocker for business buyers", "info_card", 1),
     ])
 
 
@@ -126,10 +137,10 @@ def make_invalid_strategy() -> S.ImageStrategy:
         return make_slot(sid, "CLARITY", "interpretation",
                          f"Generic clarity objective number {sid} about the files",
                          "hero_macro", primary)
-    slots = [slot(i, i - 1) for i in range(1, 7)]
-    slots.append(make_slot(7, "CTR", "attention",
+    slots = [slot(i, i - 1) for i in range(1, 10)]
+    slots.append(make_slot(10, "CTR", "attention",
                            "Another attention-grab visual for the search grid",
-                           "hero_macro", 6))
+                           "hero_macro", 9))
     return S.ImageStrategy(slots=slots)
 
 
@@ -137,27 +148,34 @@ def make_listing() -> S.ListingStrategy:
     return S.ListingStrategy(
         primary_keyword="gold foil digital paper",
         secondary_keywords=["metallic texture", "wedding background"],
+        long_tail_keywords=["gold foil digital paper for wedding invitations"],
+        search_phrases=["seamless gold texture instant download"],
         titles=[
-            S.TitleVariant(title="Gold Foil Digital Paper — 12 Seamless Metallic Textures, 300 DPI Instant Download, Commercial Use", strategy="Resolves both severity-5 doubts in-title."),
+            S.TitleVariant(title="Gold Foil Digital Paper — 12 Seamless Metallic Textures, 300 DPI Instant Download, Commercial Use", strategy="Resolves both severity-5 doubts in-title.", is_best=True),
             S.TitleVariant(title="Liquid Gold Texture Pack, Luxury Digital Paper for Wedding Invitations, 12x12 Instant Download", strategy="Emotional driver: luxury client work."),
             S.TitleVariant(title="Seamless Gold Foil Backgrounds, 12 Printable Metallic Papers, 300 DPI JPG, Small Business License", strategy="Differentiator: seamless claim."),
+            S.TitleVariant(title="Gold Digital Paper Bundle, 12 Metallic Backgrounds for Branding & Stationery, Instant Download", strategy="SEO-maximal phrasing."),
+            S.TitleVariant(title="Luxury Gold Foil Textures for Wedding Designers, 12 Files, Commercial License Included", strategy="Benefit-led phrasing."),
+            S.TitleVariant(title="12 Gold Foil Digital Papers, Seamless Tileable Metallic Textures, 300 DPI, Instant Download", strategy="Spec-forward phrasing."),
         ],
+        title_explanation="The best title front-loads the primary keyword and resolves both severity-5 doubts (digital-vs-physical, commercial license) in the visible 40-char window.",
         tags=["gold digital paper", "gold foil texture", "metallic background",
               "seamless pattern", "wedding stationery", "digital download",
               "commercial use", "luxury scrapbook", "gold backdrop",
               "invitation paper", "printable paper", "junk journal gold",
               "branding texture"],
+        materials=["JPG file", "300 DPI"],
         description_blocks=[
-            S.DescriptionBlock(heading="What you get", bde_stage="interpretation",
+            S.DescriptionBlock(section="opening_hook", heading="What you get", bde_stage="interpretation",
                 body="12 seamless gold foil textures — JPG, 12x12 in, 300 DPI. Instant digital download; nothing ships.",
                 uncertainty_resolved="Digital vs physical ambiguity"),
-            S.DescriptionBlock(heading="Print-perfect quality", bde_stage="trust",
+            S.DescriptionBlock(section="file_details", heading="Print-perfect quality", bde_stage="trust",
                 body="Every file is 3600x3600 px. Zoom to 100% and the foil detail stays crisp.",
                 uncertainty_resolved="Pixelation-when-printed doubt"),
-            S.DescriptionBlock(heading="Made for client work", bde_stage="usage_imagination",
+            S.DescriptionBlock(section="transformation", heading="Made for client work", bde_stage="usage_imagination",
                 body="Drop these behind invitation suites, brand mockups, or packaging.",
                 uncertainty_resolved="Elegant wedding aesthetic fit"),
-            S.DescriptionBlock(heading="Commercial license included", bde_stage="final_objection",
+            S.DescriptionBlock(section="objection_handling", heading="Commercial license included", bde_stage="final_objection",
                 body="Unlimited client projects; products for sale up to 500 units per design.",
                 uncertainty_resolved="Can I legally use these in work I sell"),
         ],
@@ -170,17 +188,50 @@ def make_listing() -> S.ListingStrategy:
     )
 
 
+def make_competitor_intel() -> S.CompetitorIntelligence:
+    return S.CompetitorIntelligence(
+        best_selling_patterns=["Top bundles show per-item math in the value image",
+                               "Top listings lead titles with the file count"],
+        popular_keywords=["gold digital paper", "wedding stationery texture"],
+        common_image_styles=["flat-lay grid", "styled mockup"],
+        pricing_patterns="Bundles of 10-15 textures cluster at $6-$12.",
+        customer_expectations=["Seamless tiling proof", "Commercial license stated up front"],
+        review_language_signals=["praise: 'exactly as pictured'", "complaint: 'no license info'"],
+        competitor_weaknesses=["Most listings bury the license terms in paragraph 3",
+                               "Few show a 100% zoom crop proving resolution"],
+        missed_opportunities=["No competitor shows a branding use case beyond weddings",
+                              "No competitor shows a tiling demo image"],
+        advantages=[
+            S.CompetitorAdvantage(area="seo", how_this_listing_wins="License terms front-loaded in tags and first description line."),
+            S.CompetitorAdvantage(area="imagery", how_this_listing_wins="Dedicated tiling-demo and zoom-proof slots competitors skip."),
+            S.CompetitorAdvantage(area="value_perception", how_this_listing_wins="Per-texture cost math shown directly in the value-breakdown image."),
+        ],
+    )
+
+
+def make_pricing() -> S.PricingStrategy:
+    return S.PricingStrategy(
+        recommended_price=8.99, price_range_low=6.99, price_range_high=12.99,
+        psychological_pricing_note="Charm pricing at $8.99 anchors below the $9-$10 bundle cluster.",
+        price_positioning="mid-market — premium finish, bundle-tier quantity.",
+        bundle_opportunities=["Pair with a matching rose-gold texture pack"],
+        upsell_ideas=["Extended commercial license upgrade", "PNG transparent variant add-on"],
+        premium_version_opportunities=["A 30-texture 'deluxe' tier at a higher price point"],
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 
 def test_signal_extraction():
     s = signals.extract(
-        "Gold Foil Digital Paper 12 Files Instant Download",
-        "12 JPG files, 12x12 in, 300 DPI. Commercial use. Perfect for invitations. FAQ below.",
-        8.99, 5)
+        "Gold Foil Digital Bundle 12 Files Instant Download",
+        "12 JPG files, 12x12 in, 300 DPI. Commercial use bundle pack of 12. Perfect for invitations. FAQ below.",
+        8.99, 5, ["texture_01.jpg", "texture_02.jpg"])
     assert s.spec_hits >= 3, s.spec_hits
-    assert s.category_hits["digital_product"] > s.category_hits["physical_product"]
+    assert s.category_hits["digital_bundle"] > s.category_hits["pattern"]
+    assert "jpg" in s.detected_formats
     assert 0 <= s.interpretation_signal <= 100
     empty = signals.extract("thing", "nice item", None, 0)
     assert empty.interpretation_signal < s.interpretation_signal
@@ -251,6 +302,7 @@ def test_orchestrator_regeneration_loop():
     from app.pipeline import orchestrator
 
     analysis, bde, listing = make_analysis(), make_bde(), make_listing()
+    competitor_intel, pricing = make_competitor_intel(), make_pricing()
     attempts = {"n": 0}
 
     def fake_image_run(a, b, c, regeneration_feedback=None):
@@ -267,14 +319,18 @@ def test_orchestrator_regeneration_loop():
                       lambda *a, **k: (bde, {"tokens_in": 1, "tokens_out": 1})), \
          patch.object(orchestrator.category_classifier, "run",
                       lambda *a, **k: (S.CategoryClassification(
-                          category="digital_product", confidence=0.95,
-                          reasoning="digital files, instant download",
+                          category="digital_bundle", confidence=0.95,
+                          reasoning="digital texture files, instant download",
                           signals_considered=["lexical", "structural", "BDE scenario"],
                           listing_structure_implications=["download disambiguation", "license visuals",
                                                           "file grid slot", "spec-first description"]),
                           {"tokens_in": 1, "tokens_out": 1})), \
          patch.object(orchestrator.listing_strategy, "run",
                       lambda *a, **k: (listing, {"tokens_in": 1, "tokens_out": 1})), \
+         patch.object(orchestrator.competitor_intelligence, "run",
+                      lambda *a, **k: (competitor_intel, {"tokens_in": 1, "tokens_out": 1})), \
+         patch.object(orchestrator.pricing_strategy, "run",
+                      lambda *a, **k: (pricing, {"tokens_in": 1, "tokens_out": 1})), \
          patch.object(orchestrator.image_strategy, "run", fake_image_run):
         result = orchestrator.generate_listing("Gold Foil Paper", "12 textures")
 
@@ -293,6 +349,7 @@ def test_orchestrator_regeneration_loop():
 def test_fail_safe_when_never_valid():
     from app.pipeline import orchestrator
     analysis, bde, listing = make_analysis(), make_bde(), make_listing()
+    competitor_intel, pricing = make_competitor_intel(), make_pricing()
 
     with patch.object(orchestrator.product_analysis, "run",
                       lambda *a, **k: (analysis, {"tokens_in": 1, "tokens_out": 1})), \
@@ -300,11 +357,15 @@ def test_fail_safe_when_never_valid():
                       lambda *a, **k: (bde, {"tokens_in": 1, "tokens_out": 1})), \
          patch.object(orchestrator.category_classifier, "run",
                       lambda *a, **k: (S.CategoryClassification(
-                          category="digital_product", confidence=0.9, reasoning="r",
+                          category="digital_bundle", confidence=0.9, reasoning="r",
                           listing_structure_implications=["a", "b", "c", "d"]),
                           {"tokens_in": 1, "tokens_out": 1})), \
          patch.object(orchestrator.listing_strategy, "run",
                       lambda *a, **k: (listing, {"tokens_in": 1, "tokens_out": 1})), \
+         patch.object(orchestrator.competitor_intelligence, "run",
+                      lambda *a, **k: (competitor_intel, {"tokens_in": 1, "tokens_out": 1})), \
+         patch.object(orchestrator.pricing_strategy, "run",
+                      lambda *a, **k: (pricing, {"tokens_in": 1, "tokens_out": 1})), \
          patch.object(orchestrator.image_strategy, "run",
                       lambda *a, **k: (make_invalid_strategy(),
                                        {"tokens_in": 1, "tokens_out": 1})):

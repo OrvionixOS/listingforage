@@ -169,14 +169,14 @@ def compute(bde: BDEOutput, listing: ListingStrategy, images: ImageStrategy,
         ("13 tags", len(listing.tags) == 13, 8),
         ("4+ description blocks", len(listing.description_blocks) >= 4, 10),
         ("FAQ present", len(listing.faq_items) >= 1, 8),
-        ("7-slot image system", len(slots) == 7, 12),
+        ("10-slot image system", len(slots) == 10, 12),
         ("Price anchor strategy", bool(listing.price_anchor_strategy.strip()), 6),
         ("Validator passed", report.valid, 10),
     ]
     for name, ok, weight in parts:
         f.append(ScoreFactor(factor=name, impact=weight if ok else -weight,
                  detail="present" if ok else "MISSING"))
-    completeness = _score(38, f, "Structural completeness of the listing system against the full ListingForge specification.")
+    completeness = _score(38, f, "Structural completeness of the listing system against the full Etsy Listing AI Studio specification.")
 
     # ---------------- Conversion (composite) ----------------
     f = []
@@ -184,10 +184,10 @@ def compute(bde: BDEOutput, listing: ListingStrategy, images: ImageStrategy,
     rate = resolved / total_high if total_high else 1.0
     f.append(ScoreFactor(factor="High-severity doubt resolution", impact=int(rate * 30) - 15,
              detail=f"{resolved}/{total_high} severity-4/5 buyer doubts are resolved by a slot, block, or FAQ."))
-    obj_slot = next((s for s in slots if s.slot_id == 7), None)
+    obj_slot = next((s for s in slots if s.slot_id == 10), None)
     if obj_slot and obj_slot.intent == ImageIntent.CONVERSION:
         f.append(ScoreFactor(factor="Final-objection killer", impact=8,
-                 detail=f"Slot 7 targets: {obj_slot.objective[:70]}"))
+                 detail=f"Slot 10 (brand_cta) targets: {obj_slot.objective[:70]}"))
     faq_blockers = len(listing.faq_items)
     f.append(ScoreFactor(factor="Objection FAQ coverage", impact=min(faq_blockers, 3) * 4,
              detail=f"{faq_blockers} FAQ item(s) answering final objections."))

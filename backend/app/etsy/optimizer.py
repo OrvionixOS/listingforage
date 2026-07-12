@@ -127,7 +127,7 @@ def analyze(db: Session, listing: Listing, conn, client: EtsyClient | None = Non
         if our_images < avg_imgs - 1:
             recs.append({"area": "image_gap",
                          "recommendation": f"Competitors average {avg_imgs:.0f} images; you have {our_images}. "
-                                           "Add supplementary angles beyond the 7-slot core."})
+                                           "Regenerate any missing slots to complete the full 10-image gallery."})
 
     # --- price positioning -----------------------------------------------------
     prices = []

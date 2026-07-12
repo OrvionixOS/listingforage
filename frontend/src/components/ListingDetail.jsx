@@ -24,19 +24,6 @@ const SCORE_LABEL = {
 
 function copy(text) { navigator.clipboard?.writeText(text); }
 
-function renderPrompt(p) {
-  if (!p) return "";
-  const lines = [
-    `SUBJECT: ${p.subject}`, `LIGHTING: ${p.lighting}`, `CAMERA: ${p.camera}`,
-    `ENVIRONMENT: ${p.environment}`, `COMPOSITION: ${p.composition}`,
-    `PRODUCT FOCUS: ${p.product_focus}`, `REALISM: ${p.realism_constraint}`,
-  ];
-  if (p.text_overlays?.length) lines.push(`TEXT OVERLAYS: ${p.text_overlays.map((t) => `"${t}"`).join(" ")}`);
-  if (p.negative) lines.push(`NEGATIVE: ${p.negative}`);
-  lines.push("Etsy conversion optimized, designed to reduce buyer uncertainty.");
-  return lines.join("\n");
-}
-
 function scoreColor(v) {
   if (v >= 75) return "var(--signal-green)";
   if (v >= 50) return "var(--gold-bright)";
@@ -93,8 +80,10 @@ export default function ListingDetail({ id, onBack }) {
       <h1 style={{ marginTop: 16 }}>{data.title}</h1>
       <div className="card">
         <p><span className="spinner" />
-          Running the 11-step pipeline — analysis, Buyer Decision Engine, strategy,
-          copy, image strategy, image generation, validation, sequencing.</p>
+          Running the full pipeline — product analysis, Buyer Decision Engine,
+          category classification, listing strategy, competitor intelligence,
+          pricing strategy, the 10-image gallery strategy, image generation,
+          validation, and sequencing.</p>
         {data.progress && (
           <>
             <div className="progress-track" style={{ marginTop: 16 }} role="progressbar"
@@ -126,11 +115,9 @@ export default function ListingDetail({ id, onBack }) {
   const out = data.output || {};
   const bde = out.buyer_decision_engine || {};
   const listing = out.listing_strategy || {};
-  const slots = (out.image_prompts?.slots || []).slice().sort((a, b) => a.slot_id - b.slot_id);
   const report = out.validation_report || {};
   const scores = out.conversion_scores || {};
   const stageMap = Object.fromEntries((bde.stage_assessments || []).map((s) => [s.stage, s]));
-  const uMap = Object.fromEntries((bde.buyer_uncertainty_map || []).map((u) => [u.id, u]));
 
   const doExport = async (fmt) => setExported(await api.exportFmt(id, fmt));
 
@@ -151,7 +138,7 @@ export default function ListingDetail({ id, onBack }) {
       )}
 
       <div className="tabs">
-        {[["scores", "Quality"], ["editor", "Editor"], ["decision", "Decision map"], ["copy", "Titles & copy"], ["images", "Image studio"], ["journey", "Buyer journey"], ["seo", "SEO"], ["publish", "Publish"], ["export", "Export"]].map(([k, label]) => (
+        {[["scores", "Quality"], ["editor", "Editor"], ["decision", "Decision map"], ["copy", "Titles & copy"], ["market", "Market intel"], ["images", "Image studio"], ["journey", "Buyer journey"], ["seo", "SEO"], ["publish", "Publish"], ["export", "Export"]].map(([k, label]) => (
           <button key={k} className={`tab ${tab === k ? "active" : ""}`} onClick={() => setTab(k)}>{label}</button>
         ))}
       </div>
@@ -289,12 +276,18 @@ export default function ListingDetail({ id, onBack }) {
       {tab === "copy" && (
         <>
           <div className="card">
-            <h2>Title variants</h2>
+            <h2>Title — best + 5 alternatives</h2>
             <p className="sub">Each exploits a different Buyer Decision Engine insight. Tap to copy.</p>
+            {listing.title_explanation && (
+              <p className="sub" style={{ marginTop: 8, fontSize: 12.5 }}>{listing.title_explanation}</p>
+            )}
             {(listing.titles || []).map((t, i) => (
               <div className="row-item" key={i}>
                 <div>
-                  <div className="row-title">{t.title}</div>
+                  <div className="row-title">
+                    {t.title}{" "}
+                    {t.is_best && <span className="pill gold" style={{ fontSize: 10.5 }}>best</span>}
+                  </div>
                   <div className="sub">{t.strategy}</div>
                 </div>
                 <button className="btn-ghost" onClick={() => copy(t.title)}>Copy</button>
@@ -313,6 +306,7 @@ export default function ListingDetail({ id, onBack }) {
               <div key={i} style={{ marginTop: 18 }}>
                 <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                   <strong>{b.heading}</strong>
+                  <span className="pill">{(b.section || "").replace(/_/g, " ")}</span>
                   <span className="pill">{STAGE_LABEL[b.bde_stage] || b.bde_stage}</span>
                 </div>
                 <p style={{ marginTop: 6, whiteSpace: "pre-wrap" }}>{b.body}</p>
@@ -336,55 +330,10 @@ export default function ListingDetail({ id, onBack }) {
         <StudioPanel listingId={id} slots={out.image_prompts.slots}
                      genImages={genImages} reload={loadImages} />
       </>)}
-      {false && (
-        <div className="card">
-          <h2>The 7-image system</h2>
-          <p className="sub">Each slot claims a different buyer uncertainty. Prompts carry mandatory lighting, camera, environment, composition, product-focus, and realism specs.</p>
-          <div className="slot-grid">
-            {slots.map((s) => (
-              <div className="slot-card" key={s.slot_id}>
-                <div className="slot-head">
-                  <span className="slot-num">{s.slot_id}</span>
-                  <span>
-                    <span className="pill gold">{s.intent}</span>{" "}
-                    <span className="pill">{STAGE_LABEL[s.psychological_stage] || s.psychological_stage}</span>
-                  </span>
-                </div>
-                <div className="sub mono" style={{ fontSize: 11.5 }}>{s.required_visual_type}</div>
-                {genImages[s.slot_id] && (
-                  <div style={{ margin: "10px 0" }}>
-                    <img src={genImages[s.slot_id].blobUrl} alt={`slot ${s.slot_id}`}
-                         style={{ width: "100%", borderRadius: 8, border: "1px solid var(--hairline)" }} />
-                    <div className="sub mono" style={{ fontSize: 11.5, marginTop: 6, display: "flex", justifyContent: "space-between" }}>
-                      <span>pixel score {genImages[s.slot_id].meta.validation_score}/100
-                        {genImages[s.slot_id].meta.regeneration_count > 0 &&
-                          ` · ${genImages[s.slot_id].meta.regeneration_count} regen`}</span>
-                      <span>seq #{genImages[s.slot_id].meta.display_order}</span>
-                    </div>
-                    <button className="btn-ghost" style={{ marginTop: 8 }}
-                            disabled={regenBusy === s.slot_id}
-                            onClick={() => regenerate(s.slot_id)}>
-                      {regenBusy === s.slot_id ? "Regenerating…" : "Regenerate"}
-                    </button>
-                  </div>
-                )}
-                <div className="slot-purpose"><strong>Removes:</strong> {s.objective}</div>
-                {uMap[s.primary_uncertainty_id] && (
-                  <div className="sub" style={{ fontSize: 12, marginBottom: 8 }}>
-                    ↳ doubt #{s.primary_uncertainty_id} (sev {uMap[s.primary_uncertainty_id].severity}): {uMap[s.primary_uncertainty_id].uncertainty}
-                  </div>
-                )}
-                <div className="slot-prompt">{renderPrompt(s.prompt)}</div>
-                {(s.prompt_constraints || []).length > 0 && (
-                  <p className="sub" style={{ marginTop: 8, fontSize: 12 }}>Constraints: {s.prompt_constraints.join(" · ")}</p>
-                )}
-                <button className="btn-ghost" style={{ marginTop: 10 }} onClick={() => copy(renderPrompt(s.prompt))}>Copy prompt</button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
+      {tab === "market" && (
+        <MarketTab competitor={out.competitor_intelligence} pricing={out.pricing_strategy} />
+      )}
 
       {tab === "editor" && (
         <EditorTab listingId={id} output={out} price={data.input_price}
@@ -402,6 +351,8 @@ export default function ListingDetail({ id, onBack }) {
           <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
             <button className="btn" onClick={() => doExport("etsy")}>Etsy paste-ready</button>
             <button className="btn-ghost" onClick={() => doExport("images")}>Image production brief</button>
+            <button className="btn-ghost" onClick={() => doExport("competitor")}>Competitor intelligence</button>
+            <button className="btn-ghost" onClick={() => doExport("pricing")}>Pricing strategy</button>
             <button className="btn-ghost" onClick={() => doExport("scorecard")}>Scorecard</button>
             <button className="btn-ghost" onClick={() => doExport("csv")}>CSV row</button>
           </div>
@@ -470,7 +421,7 @@ function PublishPanel({ listingId }) {
         ) : (
           <div style={{ marginTop: 10 }}>
             <p className="sub">{status.configured
-              ? "Connect your Etsy shop to publish directly from ListingForge."
+              ? "Connect your Etsy shop to publish directly from Etsy Listing AI Studio."
               : "Etsy API keys not configured on this server (set ETSY_API_KEY + ETSY_REDIRECT_URI)."}</p>
             {status.configured && <button className="btn" style={{ marginTop: 12 }} onClick={connect}>Connect Etsy shop</button>}
           </div>
@@ -536,6 +487,71 @@ function PublishPanel({ listingId }) {
             ))}
           </div>
         )}
+      </div>
+    </>
+  );
+}
+
+
+function MarketTab({ competitor, pricing }) {
+  const c = competitor || {};
+  const p = pricing || {};
+  return (
+    <>
+      <div className="card">
+        <h2>How this listing beats competitors</h2>
+        <p className="sub">AI-modeled competitor intelligence for this product's category.</p>
+        <div style={{ marginTop: 10 }}>
+          {(c.advantages || []).map((a, i) => (
+            <div className="u-item" key={i}>
+              <div className="sev sev-3">→</div>
+              <div>
+                <div className="sub mono" style={{ fontSize: 11.5 }}>{a.area}</div>
+                <div style={{ fontSize: 14 }}>{a.how_this_listing_wins}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+        <h2 style={{ marginTop: 22 }}>Best-selling patterns in this category</h2>
+        <p className="sub">{(c.best_selling_patterns || []).join(" · ")}</p>
+        <h2 style={{ marginTop: 18 }}>Competitor weaknesses</h2>
+        {(c.competitor_weaknesses || []).map((w, i) => (
+          <div className="u-item" key={i}><div className="sev sev-4">!</div><div>{w}</div></div>
+        ))}
+        <h2 style={{ marginTop: 18 }}>Missed opportunities this listing claims</h2>
+        {(c.missed_opportunities || []).map((m, i) => (
+          <div className="u-item" key={i}><div className="sev sev-3">+</div><div>{m}</div></div>
+        ))}
+        <h2 style={{ marginTop: 18 }}>Popular keywords</h2>
+        <div style={{ marginTop: 8 }}>{(c.popular_keywords || []).map((k, i) => <span className="tag-chip" key={i}>{k}</span>)}</div>
+        <h2 style={{ marginTop: 18 }}>Pricing patterns observed</h2>
+        <p className="sub">{c.pricing_patterns}</p>
+        <h2 style={{ marginTop: 18 }}>What buyers praise / complain about</h2>
+        <p className="sub">{(c.review_language_signals || []).join(" · ")}</p>
+      </div>
+
+      <div className="card">
+        <h2>Pricing strategy</h2>
+        <p className="sub" style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 28, fontWeight: 700, color: "var(--gold-bright)" }}>
+            ${(p.recommended_price ?? 0).toFixed(2)}
+          </span>
+          <span className="mono">range ${(p.price_range_low ?? 0).toFixed(2)}–${(p.price_range_high ?? 0).toFixed(2)}</span>
+          <span className="pill">{p.price_positioning}</span>
+        </p>
+        <p style={{ marginTop: 10 }}>{p.psychological_pricing_note}</p>
+        <h2 style={{ marginTop: 20 }}>Bundle opportunities</h2>
+        {(p.bundle_opportunities || []).map((b, i) => (
+          <div className="u-item" key={i}><div className="sev sev-3">+</div><div>{b}</div></div>
+        ))}
+        <h2 style={{ marginTop: 18 }}>Upsell ideas</h2>
+        {(p.upsell_ideas || []).map((u, i) => (
+          <div className="u-item" key={i}><div className="sev sev-3">+</div><div>{u}</div></div>
+        ))}
+        <h2 style={{ marginTop: 18 }}>Premium version opportunities</h2>
+        {(p.premium_version_opportunities || []).map((u, i) => (
+          <div className="u-item" key={i}><div className="sev sev-3">+</div><div>{u}</div></div>
+        ))}
       </div>
     </>
   );

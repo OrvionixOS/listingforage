@@ -2,21 +2,22 @@
 Image Generation Engine + Image Orchestration Engine.
 
 GENERATION
-  Compiles each of the 7 validated strategy slots into a style_profile and a
-  generation prompt (mandatory suffix appended), renders it via the configured
-  provider, scores the real pixels, and regenerates with validator-supplied
-  adjustments until it passes (bounded). Every attempt is logged to
-  image_generation_logs; final images land in listing_images with full
-  score history.
+  Compiles each of the 10 validated strategy slots (the full Etsy gallery)
+  into a style_profile and a generation prompt (mandatory suffix appended),
+  renders it via the configured provider, scores the real pixels, and
+  regenerates with validator-supplied adjustments until it passes (bounded).
+  Every attempt is logged to image_generation_logs; final images land in
+  listing_images with full score history.
 
 ORCHESTRATION
-  Orders the 7 finished images into the mandated psychological conversion
-  sequence and re-validates the set as a sequence:
-    1 Attention (CTR hero) → 2 Interpretation (context) → 3 Validation (trust
-    detail) → 4 Scale understanding → 5 Value demonstration → 6 Objection
-    removal → 7 Brand trust reinforcement.
-  Sets failing sequence rules are auto-fixed by reordering; unfixable sets
-  fail safe before any output is written.
+  The 10-slot image strategy already carries a FIXED conversion role per slot
+  (schemas.IMAGE_ROLE_BY_SLOT), so display order is simply slot_id order:
+    1 Hero → 2 Overview → 3 Value breakdown → 4 Lifestyle mockup →
+    5 Alternate use case → 6 Close-up detail → 7 How it works →
+    8 Sizes/formats/compatibility → 9 Benefits/transformation → 10 Brand + CTA.
+  This step re-validates the finished set carries every mandated role and
+  fails safe (rather than shipping an incomplete gallery) if one is missing —
+  the Phase-2 schema/validator should make that impossible upstream.
 """
 from __future__ import annotations
 
@@ -28,7 +29,7 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..database import ImageGenerationLog, ListingImage
-from ..schemas import BDEStage, ImageIntent, ImageSlot, ImageStrategy
+from ..schemas import IMAGE_ROLE_BY_SLOT, ImageSlot, ImageStrategy
 from .image_validator import ImageScores, score_image
 from .providers import ImageProvider, get_provider
 
@@ -161,73 +162,32 @@ def generate_slot(db: Session, listing_id: str, slot: ImageSlot,
 
 
 # ---------------------------------------------------------------------------
-# Orchestration: psychological conversion sequence
+# Orchestration: fixed 10-role Etsy gallery sequence
 # ---------------------------------------------------------------------------
-
-# position → predicate over (intent, stage, visual_type)
-SEQUENCE_SPEC = [
-    ("attention_hero",      lambda s: s.intent == ImageIntent.CTR),
-    ("interpretation",      lambda s: s.intent in (ImageIntent.CLARITY, ImageIntent.CONTEXT)
-                                      and s.psychological_stage in (BDEStage.interpretation, BDEStage.usage_imagination)),
-    ("trust_detail",        lambda s: s.intent == ImageIntent.TRUST
-                                      or s.required_visual_type in ("zoom_proof", "process_shot")),
-    ("scale_understanding", lambda s: s.required_visual_type in
-                                      ("scale_reference", "file_grid", "size_chart", "tiling_demo", "variant_grid")),
-    ("value_demonstration", lambda s: s.intent in (ImageIntent.VALUE, ImageIntent.CONTEXT)),
-    ("objection_removal",   lambda s: s.intent == ImageIntent.CONVERSION
-                                      or s.required_visual_type in ("comparison_split", "info_card")),
-    ("brand_reinforcement", lambda s: True),  # strongest remaining premium visual
-]
-
 
 def orchestrate_sequence(strategy: ImageStrategy,
                          generated: list[GeneratedSlotImage]) -> tuple[list[GeneratedSlotImage], dict]:
-    """Assign display_order 1-7 per the psychological sequence. Greedy matching
-    with auto-fix: each position takes the best unassigned matching slot; the
-    final position takes the highest-scoring remainder (brand reinforcement)."""
+    """Display order is slot_id order — the strategy schema already enforces
+    slot.role == IMAGE_ROLE_BY_SLOT[slot_id], so the gallery is already in the
+    mandated psychological sequence. This re-verifies every role is present
+    and fails safe rather than shipping an incomplete gallery."""
     slots = {s.slot_id: s for s in strategy.slots}
-    by_score = sorted(generated, key=lambda g: -g.validation_score)
-    unassigned = {g.slot_id for g in generated}
     order: dict[int, GeneratedSlotImage] = {}
-    fixes: list[str] = []
+    for g in generated:
+        g.display_order = g.slot_id
+        order[g.slot_id] = g
 
-    for pos, (name, pred) in enumerate(SEQUENCE_SPEC, start=1):
-        candidates = [g for g in by_score if g.slot_id in unassigned and pred(slots[g.slot_id])]
-        if candidates:
-            pick = candidates[0]
-        else:
-            # auto-fix: relax to any remaining slot, note the fix
-            pick = next(g for g in by_score if g.slot_id in unassigned)
-            fixes.append(f"position {pos} ({name}): no exact match, auto-assigned "
-                         f"slot {pick.slot_id} ({slots[pick.slot_id].required_visual_type})")
-        pick.display_order = pos
-        order[pos] = pick
-        unassigned.discard(pick.slot_id)
-
-    # sequence set validation (mirrors spec's rejection rules)
-    checks = {
-        "has_trust_stage": any(slots[g.slot_id].intent == ImageIntent.TRUST
-                               or slots[g.slot_id].required_visual_type in ("zoom_proof", "process_shot")
-                               for g in generated),
-        "has_usage_clarity": any(slots[g.slot_id].required_visual_type in ("lifestyle_scene", "mockup_in_use")
-                                 for g in generated),
-        "has_scale_or_realism": any(slots[g.slot_id].required_visual_type in
-                                    ("scale_reference", "file_grid", "size_chart", "tiling_demo", "variant_grid", "zoom_proof")
-                                    for g in generated),
-        "has_conversion_proof": any(slots[g.slot_id].intent == ImageIntent.CONVERSION
-                                    or slots[g.slot_id].required_visual_type in ("comparison_split", "info_card")
-                                    for g in generated),
-        "no_function_repetition": len({SEQUENCE_SPEC[g.display_order - 1][0] for g in generated}) == 7,
-    }
+    present_roles = {slots[g.slot_id].role for g in generated}
+    checks = {f"has_{role.value}": role in present_roles for role in IMAGE_ROLE_BY_SLOT.values()}
     report = {
-        "sequence": [{"position": p, "function": SEQUENCE_SPEC[p - 1][0],
+        "sequence": [{"position": p, "role": slots[order[p].slot_id].role.value,
                       "slot_id": order[p].slot_id,
                       "visual_type": slots[order[p].slot_id].required_visual_type,
                       "score": order[p].validation_score}
                      for p in sorted(order)],
         "checks": checks,
-        "auto_fixes": fixes,
-        "valid": all(checks.values()),
+        "auto_fixes": [],
+        "valid": all(checks.values()) and len(order) == 10,
     }
     if not report["valid"]:
         failed = [k for k, v in checks.items() if not v]

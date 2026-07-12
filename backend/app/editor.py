@@ -111,6 +111,7 @@ def apply_edits(db: Session, listing: Listing, edits: dict) -> EditResult:
             old = ls.description_blocks[i] if i < len(ls.description_blocks) else None
             blocks.append(DescriptionBlock(
                 heading=b["heading"].strip(), body=b["body"].strip(),
+                section=b.get("section") or (old.section if old else "features"),
                 bde_stage=b.get("bde_stage") or (old.bde_stage if old else "interpretation"),
                 uncertainty_resolved=b.get("uncertainty_resolved")
                                      or (old.uncertainty_resolved if old else None)))
@@ -118,7 +119,8 @@ def apply_edits(db: Session, listing: Listing, edits: dict) -> EditResult:
     if "faq_items" in edits:
         ls.faq_items = edits["faq_items"]
     if "materials" in edits:
-        output.product_analysis.materials_or_format = [m.strip() for m in edits["materials"]]
+        ls.materials = [m.strip() for m in edits["materials"]]
+        output.product_analysis.materials_or_format = ls.materials
     if "price" in edits:
         listing.input_price = float(edits["price"])
 
@@ -186,8 +188,9 @@ def compliance(output: ListingOutput, listing: Listing, image_count: int) -> dic
         f"exactly {ETSY_TAG_COUNT} tags": len(output.listing_strategy.tags) == ETSY_TAG_COUNT,
         f"all tags ≤ {ETSY_TAG_MAX} chars": all(len(t) <= ETSY_TAG_MAX for t in output.listing_strategy.tags),
         f"title ≤ {ETSY_TITLE_MAX} chars": len(output.listing_strategy.titles[0].title) <= ETSY_TITLE_MAX,
-        "7 listing images": image_count >= 7,
-        f"materials ≤ {ETSY_MATERIALS_MAX}": len(output.product_analysis.materials_or_format) <= ETSY_MATERIALS_MAX,
+        "10 listing images": image_count >= 10,
+        f"materials ≤ {ETSY_MATERIALS_MAX}": len(output.listing_strategy.materials
+                                                 or output.product_analysis.materials_or_format) <= ETSY_MATERIALS_MAX,
         "price set (≥ $0.20)": bool(listing.input_price and listing.input_price >= 0.20),
     }
     failed = [k for k, ok in checks.items() if not ok]
@@ -260,7 +263,7 @@ def assist(listing: Listing, field_name: str, instruction: str = "",
         task += f"\nUSER DIRECTION: {instruction}"
 
     result, _ = structured_call(
-        "You are ListingForge's conversion copy editor. Improve the given field so it "
+        "You are Etsy Listing AI Studio's conversion copy editor. Improve the given field so it "
         "resolves the highest-severity buyer uncertainties. Never invent product claims. "
         "Explain your change in one or two sentences.",
         context + "\n\n" + task, Improvement, max_tokens=1200, temperature=0.4)

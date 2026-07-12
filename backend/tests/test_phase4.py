@@ -27,7 +27,7 @@ def fresh():
     db.add(user); db.commit()
     output = make_output()
     listing = Listing(user_id=user.id, title="Gold Paper", status="complete",
-                      input_price=8.99, category="digital_product",
+                      input_price=8.99, category="digital_bundle",
                       output_json=output.model_dump(mode="json"))
     db.add(listing); db.commit()
     return db, user, listing
@@ -105,7 +105,7 @@ def test_compliance_score():
     db, user, listing = fresh()
     scores = editor.rescore(db, listing)
     comp = scores["compliance"]
-    assert any("7 listing images" in p for p in comp["problems"])  # none generated yet
+    assert any("10 listing images" in p for p in comp["problems"])  # none generated yet
     with_images(db, listing)
     comp2 = editor.rescore(db, listing)["compliance"]
     assert comp2["score"] > comp["score"]
@@ -131,11 +131,11 @@ def test_journey():
     with_images(db, listing)
     j = insights.journey(db, listing)
     assert j["search_result"]["title_shown"]
-    assert len(j["image_sequence"]) == 7
-    assert [i["position"] for i in j["image_sequence"]] == [1, 2, 3, 4, 5, 6, 7]
+    assert len(j["image_sequence"]) == 10
+    assert [i["position"] for i in j["image_sequence"]] == list(range(1, 11))
     assert len(j["decision_timeline"]) == 6
     assert all(f["issue"] and f["where"] for f in j["friction_points"])
-    print(f"PASS journey simulator: 7-step sequence, 6-stage timeline, "
+    print(f"PASS journey simulator: 10-step sequence, 6-stage timeline, "
           f"{len(j['friction_points'])} friction points surfaced")
     db.close()
 
@@ -151,7 +151,7 @@ def test_exports():
     z = zipfile.ZipFile(io.BytesIO(blob))
     names = z.namelist()
     assert "listing.json" in names and "report.pdf" in names
-    assert sum(1 for n in names if n.startswith("images/")) == 7
+    assert sum(1 for n in names if n.startswith("images/")) == 10
     assert "image_prompts.txt" in names
     print(f"PASS exports: PDF ({len(pdf)//1024}KB), CSV, ZIP with {len(names)} assets")
     db.close()
@@ -168,7 +168,7 @@ def test_image_reorder_and_versions():
     db.commit()
     orders = sorted(i.display_order for i in db.query(ListingImage)
                     .filter_by(listing_id=listing.id, superseded=False).all())
-    assert orders == [1, 2, 3, 4, 5, 6, 7]
+    assert orders == list(range(1, 11))
     # version history + restore
     from app.imaging.providers import LocalStudioProvider
     from app.schemas import ListingOutput
@@ -213,7 +213,8 @@ def test_pipeline_progress_and_brand_injection():
 
     from app import schemas as S
     from app.pipeline import orchestrator
-    from test_pipeline import make_analysis, make_bde, make_listing, make_valid_strategy
+    from test_pipeline import (make_analysis, make_bde, make_competitor_intel,
+                               make_listing, make_pricing, make_valid_strategy)
 
     db, user, _ = fresh()
     listing = Listing(user_id=user.id, title="t", status="generating")
@@ -230,11 +231,15 @@ def test_pipeline_progress_and_brand_injection():
          patch.object(orchestrator.buyer_decision_engine, "run", fake_bde), \
          patch.object(orchestrator.category_classifier, "run",
                       lambda *a, **k: (S.CategoryClassification(
-                          category="digital_product", confidence=0.9, reasoning="r",
+                          category="digital_bundle", confidence=0.9, reasoning="r",
                           listing_structure_implications=["a", "b", "c", "d"]),
                           {"tokens_in": 1, "tokens_out": 1})), \
          patch.object(orchestrator.listing_strategy, "run",
                       lambda *a, **k: (make_listing(), {"tokens_in": 1, "tokens_out": 1})), \
+         patch.object(orchestrator.competitor_intelligence, "run",
+                      lambda *a, **k: (make_competitor_intel(), {"tokens_in": 1, "tokens_out": 1})), \
+         patch.object(orchestrator.pricing_strategy, "run",
+                      lambda *a, **k: (make_pricing(), {"tokens_in": 1, "tokens_out": 1})), \
          patch.object(orchestrator.image_strategy, "run",
                       lambda *a, **k: (make_valid_strategy(), {"tokens_in": 1, "tokens_out": 1})):
         orchestrator.generate_listing(
@@ -243,11 +248,12 @@ def test_pipeline_progress_and_brand_injection():
             brand_context="BRAND SYSTEM: luxury gold",
             on_step=lambda name, i, total: seen_steps.append((name, i, total)))
 
-    assert len(seen_steps) == 11
-    assert seen_steps[0] == ("input_ingestion", 1, 11)
-    assert seen_steps[-1][1] == 11
+    total_steps = len(orchestrator.PIPELINE_STEPS) + len(orchestrator.PHASE3_STEPS)
+    assert len(seen_steps) == total_steps
+    assert seen_steps[0] == ("input_ingestion", 1, total_steps)
+    assert seen_steps[-1][1] == total_steps
     assert "PERF HISTORY" in seen_ctx["ctx"] and "BRAND SYSTEM" in seen_ctx["ctx"]
-    print("PASS progress+brand: 11 step callbacks fired in order, "
+    print(f"PASS progress+brand: {total_steps} step callbacks fired in order, "
           "brand context reached the BDE alongside performance history")
     db.close()
 

@@ -2,16 +2,18 @@
 Etsy Listing Builder + Publisher.
 
 Builds the publish payload from a completed ListingOutput + generated images,
-runs the BLOCKING pre-publish gate, creates the draft, uploads all seven
+runs the BLOCKING pre-publish gate, creates the draft, uploads all ten gallery
 images in the mandated psychological order (display_order → Etsy rank), and
-optionally flips the listing to active.
+optionally flips the listing to active. Every listing on this platform is a
+digital download (type=download, is_digital=True) — there is no physical
+fulfillment branch.
 
 BLOCK CONDITIONS (publishing refuses if any hold):
-  - fewer than 7 validated images
+  - fewer than 10 validated images (the full Etsy gallery)
   - missing CTR image
   - missing trust image
   - missing usage context image
-  - missing scale clarity image
+  - missing scale/what's-included clarity image
   - invalid/absent Etsy taxonomy id
   - missing or invalid tags
 """
@@ -27,14 +29,18 @@ from ..database import EtsyConnection, Listing, ListingImage, PublishedListing
 from ..schemas import ImageIntent, ListingOutput, ProductCategory
 from .client import EtsyClient, token_expired
 
-# Etsy taxonomy ids per ListingForge category (top-level defaults; the UI lets
-# sellers refine to a leaf node before publishing).
+# Etsy taxonomy ids per digital product category (top-level "Craft Supplies &
+# Tools > Digital" defaults; the UI lets sellers refine to a leaf node before
+# publishing).
 DEFAULT_TAXONOMY = {
-    ProductCategory.digital_product: 2078,      # Craft Supplies > Digital
-    ProductCategory.physical_product: 69150467, # Home & Living (safe default)
-    ProductCategory.print_on_demand: 374,       # Clothing
-    ProductCategory.gift_personalized: 132,     # Accessories
-    ProductCategory.saas_tool: 2078,
+    ProductCategory.printable_art: 2078,
+    ProductCategory.digital_planner: 2078,
+    ProductCategory.template: 2078,
+    ProductCategory.invitation: 2078,
+    ProductCategory.svg_cut_file: 2078,
+    ProductCategory.digital_bundle: 2078,
+    ProductCategory.educational_product: 2078,
+    ProductCategory.pattern: 2078,
 }
 
 WHO_MADE = {"default": "i_did"}
@@ -50,8 +56,8 @@ def pre_publish_gate(output: ListingOutput, images: list[ListingImage],
                      taxonomy_id: int | None) -> GateResult:
     blocks: list[str] = []
     live = [i for i in images if not i.superseded]
-    if len(live) < 7:
-        blocks.append(f"fewer than 7 images ({len(live)} generated)")
+    if len(live) < 10:
+        blocks.append(f"fewer than 10 images ({len(live)} generated) — the full Etsy gallery is required")
 
     slot_by_id = {s.slot_id: s for s in output.image_prompts.slots}
     intents = {slot_by_id[i.slot_id].intent for i in live if i.slot_id in slot_by_id}
@@ -74,34 +80,28 @@ def pre_publish_gate(output: ListingOutput, images: list[ListingImage],
 
 
 def build_payload(output: ListingOutput, price: float,
-                  taxonomy_id: int | None = None,
-                  shipping_profile_id: int | None = None,
-                  processing_min: int = 1, processing_max: int = 3) -> dict:
+                  taxonomy_id: int | None = None) -> dict:
     listing = output.listing_strategy
     category = output.product_category
-    is_digital = category in (ProductCategory.digital_product, ProductCategory.saas_tool)
+    best_title = next((t for t in listing.titles if t.is_best), listing.titles[0])
     description = "\n\n".join(f"{b.heading.upper()}\n{b.body}" for b in listing.description_blocks)
     if listing.faq_items:
         description += "\n\nFAQ\n" + "\n".join(
             f"Q: {f.get('question','')}\nA: {f.get('answer','')}" for f in listing.faq_items)
 
     payload = {
-        "quantity": 999 if is_digital else 10,
-        "title": listing.titles[0].title,
+        "quantity": 999,
+        "title": best_title.title,
         "description": description,
         "price": price,
         "who_made": WHO_MADE["default"],
         "when_made": "2020_2026",
         "taxonomy_id": taxonomy_id or DEFAULT_TAXONOMY[category],
         "tags": listing.tags,
-        "materials": output.product_analysis.materials_or_format[:13],
-        "type": "download" if is_digital else "physical",
-        "is_digital": is_digital,
+        "materials": (listing.materials or output.product_analysis.materials_or_format)[:13],
+        "type": "download",
+        "is_digital": True,
     }
-    if not is_digital:
-        payload["shipping_profile_id"] = shipping_profile_id
-        payload["processing_min"] = processing_min
-        payload["processing_max"] = processing_max
     return payload
 
 
@@ -134,7 +134,7 @@ def publish_listing(db: Session, listing: Listing, conn: EtsyConnection,
         raise ValueError("Publishing blocked: " + "; ".join(gate.blocks))
 
     token = _fresh_token(db, conn, client)
-    payload = build_payload(output, price, taxonomy_id, shipping_profile_id)
+    payload = build_payload(output, price, taxonomy_id)
     created = client.create_draft_listing(token, conn.shop_id, payload)
     etsy_listing_id = str(created["listing_id"])
 

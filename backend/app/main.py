@@ -1,5 +1,6 @@
-"""ListingForge AI — API entrypoint."""
+"""Etsy Listing AI Studio — API entrypoint."""
 import logging
+import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,7 +17,8 @@ app = FastAPI(title=settings.app_name, version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"] if settings.env == "development" else ["https://app.listingforge.ai"],
+    allow_origins=["*"] if settings.env == "development" else [
+        os.getenv("LF_ALLOWED_ORIGIN", "https://app.etsylistingaistudio.com")],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

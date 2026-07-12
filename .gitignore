@@ -1,1 +1,16 @@
 .DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.db
+backend/storage/
+backend/tests/storage/
+
+# Node
+node_modules/
+frontend/dist/
+
+# env
+.env
+

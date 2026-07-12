@@ -20,10 +20,10 @@ from ..schemas import (BDEModelOutput, BDEOutput, BDEStage, ProductAnalysis,
 from .llm import structured_call
 from .signals import InputSignals
 
-SYSTEM = """You are the BUYER DECISION ENGINE of ListingForge AI — a buyer
-decision simulation engine for e-commerce conversion optimization. You model
-how real Etsy buyers decide, stage by stage. You are a buyer-psychology
-analyst, not a copywriter.
+SYSTEM = """You are the BUYER DECISION ENGINE of Etsy Listing AI Studio — a
+buyer decision simulation engine for digital-product Etsy conversion
+optimization. You model how real Etsy buyers decide, stage by stage. You are
+a buyer-psychology analyst, not a copywriter.
 
 THE SIX STAGES (assess all six):
 
@@ -56,11 +56,12 @@ whatever the copy vibe suggests.
 ANALYSIS RULES:
 - Ground every finding in the product analysis (especially `ambiguities`) and
   the measured signals. Generic findings are worthless.
-- buyer_uncertainty_map: 6-10 items. Each is ONE specific doubt, tagged to a
-  stage, severity 1-5 (5 = purchase-blocking), with the listing surfaces that
-  can resolve it (image, title, description, faq, video). Order from most to
-  least severe. These become the assignment targets for the 7 image slots, so
-  make each one concrete and visually resolvable where possible.
+- buyer_uncertainty_map: 10-16 items — AT LEAST 10 required. Each is ONE
+  specific doubt, tagged to a stage, severity 1-5 (5 = purchase-blocking),
+  with the listing surfaces that can resolve it (image, title, description,
+  faq, video). Order from most to least severe. These become the assignment
+  targets for the 10 Etsy gallery image slots, so make each one concrete,
+  distinct, and visually resolvable where possible.
 - trust_gap_analysis: each gap needs the evidence that creates it and the
   concrete remedy that closes it.
 - conversion_blockers: only severity-4/5 doubts.
@@ -112,7 +113,7 @@ def run(analysis: ProductAnalysis, signals: InputSignals,
         + "Run the full six-stage Buyer Decision Engine analysis."
     )
     model_out, usage = structured_call(SYSTEM, content, BDEModelOutput,
-                                       max_tokens=7000, temperature=0.5)
+                                       max_tokens=9000, temperature=0.5)
     scores = compute_scores(model_out, signals)
     full = BDEOutput(**model_out.model_dump(), scores=scores,
                      input_signals=signals.to_dict())

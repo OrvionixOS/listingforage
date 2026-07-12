@@ -1,16 +1,22 @@
 """
-AI Orchestration Layer (Phase 2) — end-to-end pipeline enforcement.
+AI Orchestration Layer — end-to-end pipeline enforcement.
 
 Enforced flow:
   1. Input ingestion + deterministic signal extraction
-  2. Product analysis
+  2. Product analysis (incl. "who buys this and why")
   3. Buyer Decision Engine (analysis + computed stage scores)
-  4. Category classification (multi-signal, confidence fallback)
-  5. Listing strategy generation
-  6. Image strategy generation → Image Strategy Validator
-     (auto-regenerate with validator feedback until valid, bounded)
-  7. Conversion scoring
-  8. Output format enforcement
+  4. Digital Product Category classification (multi-signal, confidence fallback)
+  5. Listing strategy generation (titles, SEO, description architecture)
+  6. Competitor intelligence (market positioning + how this listing wins)
+  7. Pricing strategy (price point, psychological pricing, bundles/upsells)
+  8. Image strategy generation → Image Strategy Validator
+     (auto-regenerate with validator feedback until valid, bounded) — the
+     complete 10-image Etsy gallery
+  9. Conversion scoring
+  10. Output format enforcement
+
+With a DB session, three more steps generate the actual 10 gallery images,
+pixel-validate them, and sequence them (steps 11-13 below).
 
 Guarantees:
 - Every step's output is schema-validated before the next step runs.
@@ -26,8 +32,9 @@ import logging
 from dataclasses import dataclass, field
 
 from ..schemas import FINAL_OUTPUT_REQUIRED_KEYS, ListingOutput
-from . import (buyer_decision_engine, category_classifier, image_strategy,
-               listing_strategy, output_formatter, product_analysis, scoring,
+from . import (buyer_decision_engine, category_classifier,
+               competitor_intelligence, image_strategy, listing_strategy,
+               output_formatter, pricing_strategy, product_analysis, scoring,
                signals, validator)
 
 log = logging.getLogger("listingforge.pipeline")
@@ -36,7 +43,8 @@ MAX_IMAGE_ATTEMPTS = 3
 
 PIPELINE_STEPS = (
     "input_ingestion", "product_analysis", "buyer_decision_engine",
-    "category_classification", "listing_strategy", "image_strategy_validated",
+    "category_classification", "listing_strategy", "competitor_intelligence",
+    "pricing_strategy", "image_strategy_validated",
     "conversion_scoring", "output_formatting",
 )
 
@@ -83,6 +91,8 @@ def generate_listing(
     image_paths = image_paths or []
     usage = {"tokens_in": 0, "tokens_out": 0}
     done: list[str] = []
+    from pathlib import Path as _Path
+    filenames = [_Path(p).name for p in image_paths]
 
     total_steps = len(PIPELINE_STEPS) + (len(PHASE3_STEPS) if db is not None else 0)
 
@@ -99,7 +109,7 @@ def generate_listing(
     step("input_ingestion")
     if not (title or "").strip() or not (description or "").strip():
         raise PipelineError("input_ingestion", "Title and description are required.")
-    sig = signals.extract(title, description, price, len(image_paths))
+    sig = signals.extract(title, description, price, len(image_paths), filenames)
 
     # 2 — product analysis
     step("product_analysis")
@@ -136,7 +146,23 @@ def generate_listing(
         raise PipelineError("listing_strategy", str(exc)) from exc
     _acc(usage, u)
 
-    # 6 — image strategy: generate → validate → regenerate until valid
+    # 6 — competitor intelligence (market research + positioning)
+    step("competitor_intelligence")
+    try:
+        competitor_intel, u = competitor_intelligence.run(analysis, bde, classification, listing)
+    except Exception as exc:
+        raise PipelineError("competitor_intelligence", str(exc)) from exc
+    _acc(usage, u)
+
+    # 7 — pricing strategy
+    step("pricing_strategy")
+    try:
+        pricing, u = pricing_strategy.run(analysis, bde, classification)
+    except Exception as exc:
+        raise PipelineError("pricing_strategy", str(exc)) from exc
+    _acc(usage, u)
+
+    # 8 — image strategy: generate → validate → regenerate until valid
     step("image_strategy_validated")
     all_feedback: list[str] = []
     checks = []
@@ -168,22 +194,22 @@ def generate_listing(
             f"Outstanding issues: {all_feedback[-6:]}")
     report = validator.build_report(valid, checks, attempts, all_feedback)
 
-    # 7 — conversion scoring (deterministic)
+    # 9 — conversion scoring (deterministic)
     step("conversion_scoring")
     try:
         scores = scoring.compute(bde, listing, images, report)
     except Exception as exc:
         raise PipelineError("conversion_scoring", str(exc)) from exc
 
-    # 8 — output format enforcement
+    # 10 — output format enforcement
     step("output_formatting")
     try:
         output = output_formatter.run(analysis, bde, classification, listing,
-                                      images, report, scores)
+                                      images, competitor_intel, pricing, report, scores)
     except Exception as exc:
         raise PipelineError("output_formatting", str(exc)) from exc
 
-    # 9-11 — Phase 3: image generation → pixel validation → orchestration
+    # 11-13 — Phase 3: image generation → pixel validation → orchestration
     image_run = None
     if db is not None and listing_id is not None:
         step("image_generation")

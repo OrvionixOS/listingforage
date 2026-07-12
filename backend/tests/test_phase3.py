@@ -22,8 +22,8 @@ from app.etsy import optimizer
 from app.etsy.client import EtsyClient
 from app.etsy.publisher import build_payload, pre_publish_gate, publish_listing
 
-from test_pipeline import (make_analysis, make_bde, make_listing,
-                           make_valid_strategy)
+from test_pipeline import (make_analysis, make_bde, make_competitor_intel,
+                           make_listing, make_pricing, make_valid_strategy)
 
 
 def fresh_db():
@@ -43,12 +43,13 @@ def make_output() -> S.ListingOutput:
     report = v.build_report(ok, checks, 1, [])
     scores = scoring.compute(bde, listing, images, report)
     classification = S.CategoryClassification(
-        category="digital_product", confidence=0.95, reasoning="digital files",
+        category="digital_bundle", confidence=0.95, reasoning="digital texture files",
         signals_considered=["lexical", "structural", "scenario"],
         listing_structure_implications=["a", "b", "c", "d"])
     from app.pipeline import output_formatter
     return output_formatter.run(make_analysis(), bde, classification, listing,
-                                images, report, scores)
+                                images, make_competitor_intel(), make_pricing(),
+                                report, scores)
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +61,7 @@ def test_prompt_compilation():
         for req in ["LIGHTING:", "CAMERA:", "ENVIRONMENT:", "COMPOSITION:",
                     "PRODUCT FOCUS:", "REALISM:", "LENS DEFAULT:", MANDATORY_SUFFIX]:
             assert req in prompt, (slot.slot_id, req)
-    print("PASS prompt compilation: all specs + mandatory suffix in all 7 prompts")
+    print("PASS prompt compilation: all specs + mandatory suffix in all 10 prompts")
 
 
 def test_generation_and_orchestration():
@@ -70,14 +71,14 @@ def test_generation_and_orchestration():
     strategy = make_valid_strategy()
 
     run = generator.generate_all(db, listing.id, strategy)
-    assert len(run.images) == 7
+    assert len(run.images) == 10
     orders = sorted(g.display_order for g in run.images)
-    assert orders == [1, 2, 3, 4, 5, 6, 7], orders
+    assert orders == list(range(1, 11)), orders
     assert run.sequence_report["valid"], run.sequence_report
-    # position 1 must be the CTR hero
+    # position 1 must be the hero role
     pos1_slot = run.sequence_report["sequence"][0]["slot_id"]
     slot1 = next(s for s in strategy.slots if s.slot_id == pos1_slot)
-    assert slot1.intent == S.ImageIntent.CTR
+    assert slot1.role == S.ImageRole.hero
     # files really exist and are real images
     from PIL import Image
     for g in run.images:
@@ -86,10 +87,10 @@ def test_generation_and_orchestration():
         assert g.validation_score > 0
     # logs recorded every attempt
     logs = db.query(ImageGenerationLog).filter_by(listing_id=listing.id).all()
-    assert len(logs) >= 7
+    assert len(logs) >= 10
     passed_final = db.query(ListingImage).filter_by(listing_id=listing.id, superseded=False).count()
-    assert passed_final == 7
-    print(f"PASS generation+orchestration: 7 real images, sequence valid, "
+    assert passed_final == 10
+    print(f"PASS generation+orchestration: 10 real images, sequence valid, "
           f"{len(logs)} attempts logged, "
           f"regens={[g.regeneration_count for g in run.images]}")
     db.close()
@@ -169,7 +170,7 @@ def test_publish_gate_blocks():
     output = make_output()
     gate = pre_publish_gate(output, images=[], taxonomy_id=2078)
     assert not gate.ok
-    assert any("fewer than 7" in b for b in gate.blocks)
+    assert any("fewer than 10" in b for b in gate.blocks)
     gate2 = pre_publish_gate(output, images=[], taxonomy_id=None)
     assert any("taxonomy" in b for b in gate2.blocks)
     print("PASS publish gate blocks:", gate.blocks + gate2.blocks[-1:])
@@ -179,7 +180,7 @@ def test_full_publish_flow():
     db, user = fresh_db()
     output = make_output()
     listing = Listing(user_id=user.id, title="Gold Paper", status="complete",
-                      input_price=8.99, category="digital_product",
+                      input_price=8.99, category="digital_bundle",
                       output_json=output.model_dump(mode="json"))
     db.add(listing); db.commit()
     # generate real images first
@@ -195,29 +196,28 @@ def test_full_publish_flow():
     assert published["is_digital"] is True
     assert len(published["tags"]) == 13
     uploads = fake.images[record.etsy_listing_id]
-    assert len(uploads) == 7
-    assert [u["rank"] for u in uploads] == [1, 2, 3, 4, 5, 6, 7], "upload order must follow the psychological sequence"
-    print("PASS full publish: draft→images(rank 1-7)→active, payload valid")
+    assert len(uploads) == 10
+    assert [u["rank"] for u in uploads] == list(range(1, 11)), "upload order must follow the psychological sequence"
+    print("PASS full publish: draft→images(rank 1-10)→active, payload valid")
     db.close()
 
 
-def test_payload_physical_vs_digital():
+def test_payload_is_always_digital():
+    """Every category on this platform is a digital download — no physical branch."""
     output = make_output()
     p = build_payload(output, 8.99)
-    assert p["type"] == "download" and p["is_digital"]
-    output2 = make_output()
-    output2.product_category = S.ProductCategory.physical_product
-    p2 = build_payload(output2, 24.0, shipping_profile_id=123)
-    assert p2["type"] == "physical" and p2["shipping_profile_id"] == 123
-    assert "processing_min" in p2
-    print("PASS payload: digital vs physical flags, shipping profile, processing time")
+    assert p["type"] == "download" and p["is_digital"] is True
+    assert p["quantity"] == 999
+    assert p["title"] == output.listing_strategy.titles[0].title
+    assert output.listing_strategy.titles[0].is_best
+    print("PASS payload: always digital, best title used, quantity uncapped")
 
 
 def test_analytics_loop():
     db, user = fresh_db()
     conn = _connected(db, user)
     listing = Listing(user_id=user.id, title="Gold Paper", status="complete",
-                      output_json={"product_category": "digital_product"})
+                      output_json={"product_category": "digital_bundle"})
     db.add(listing); db.commit()
     pub = PublishedListing(listing_id=listing.id, user_id=user.id,
                            etsy_listing_id="5001", state="active",
@@ -257,13 +257,14 @@ def test_competitive_analysis():
 
 
 def test_pipeline_phase3_steps_enforced():
-    """Full orchestrator with db: all 11 steps must run and generated images
+    """Full orchestrator with db: every step must run and generated images
     must land in export_formats."""
     from app.pipeline import orchestrator
     db, user = fresh_db()
     listing = Listing(user_id=user.id, title="t", status="generating")
     db.add(listing); db.commit()
     analysis, bde, lst = make_analysis(), make_bde(), make_listing()
+    competitor_intel, pricing = make_competitor_intel(), make_pricing()
 
     with patch.object(orchestrator.product_analysis, "run",
                       lambda *a, **k: (analysis, {"tokens_in": 1, "tokens_out": 1})), \
@@ -271,11 +272,15 @@ def test_pipeline_phase3_steps_enforced():
                       lambda *a, **k: (bde, {"tokens_in": 1, "tokens_out": 1})), \
          patch.object(orchestrator.category_classifier, "run",
                       lambda *a, **k: (S.CategoryClassification(
-                          category="digital_product", confidence=0.9, reasoning="r",
+                          category="digital_bundle", confidence=0.9, reasoning="r",
                           listing_structure_implications=["a", "b", "c", "d"]),
                           {"tokens_in": 1, "tokens_out": 1})), \
          patch.object(orchestrator.listing_strategy, "run",
                       lambda *a, **k: (lst, {"tokens_in": 1, "tokens_out": 1})), \
+         patch.object(orchestrator.competitor_intelligence, "run",
+                      lambda *a, **k: (competitor_intel, {"tokens_in": 1, "tokens_out": 1})), \
+         patch.object(orchestrator.pricing_strategy, "run",
+                      lambda *a, **k: (pricing, {"tokens_in": 1, "tokens_out": 1})), \
          patch.object(orchestrator.image_strategy, "run",
                       lambda *a, **k: (make_valid_strategy(), {"tokens_in": 1, "tokens_out": 1})):
         result = orchestrator.generate_listing(
@@ -284,7 +289,7 @@ def test_pipeline_phase3_steps_enforced():
 
     assert result.stage_log == list(orchestrator.PIPELINE_STEPS + orchestrator.PHASE3_STEPS)
     gen = result.output.export_formats["generated_images"]
-    assert len(gen) == 7
+    assert len(gen) == 10
     for g in gen:
         assert g["final_image_url"].endswith("/file")
         assert g["validation_score"] > 0
@@ -292,7 +297,7 @@ def test_pipeline_phase3_steps_enforced():
         assert g["style_profile"]
         assert isinstance(g["regeneration_count"], int)
     assert result.output.export_formats["image_sequence"]["valid"]
-    print("PASS end-to-end 11-step pipeline: images generated inside the flow, "
+    print("PASS end-to-end pipeline: 10-image gallery generated inside the flow, "
           "all slot outputs carry url/prompt/style/score/regens")
     db.close()
 
@@ -303,7 +308,7 @@ if __name__ == "__main__":
     test_version_history_on_regenerate()
     test_publish_gate_blocks()
     test_full_publish_flow()
-    test_payload_physical_vs_digital()
+    test_payload_is_always_digital()
     test_analytics_loop()
     test_competitive_analysis()
     test_pipeline_phase3_steps_enforced()
