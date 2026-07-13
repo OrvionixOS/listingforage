@@ -157,6 +157,23 @@ class EtsyClient:
             params={"keywords": keywords, "limit": limit, "sort_on": "score"})
         return data.get("results", [])
 
+    def get_listing_public(self, listing_id: str) -> dict:
+        """Single-listing fetch (title, description, price, tags, images) with
+        only the app keystring — powers Beat-the-Best-Seller teardowns."""
+        return self.transport.request(
+            "GET", f"{API}/listings/{listing_id}",
+            headers={"x-api-key": self.api_key},
+            params={"includes": "Images"})
+
+    def get_listing_reviews_public(self, listing_id: str, limit: int = 25) -> list[dict]:
+        """Recent reviews for a listing (public scope) — review language feeds
+        the competitor weakness analysis."""
+        data = self.transport.request(
+            "GET", f"{API}/listings/{listing_id}/reviews",
+            headers={"x-api-key": self.api_key},
+            params={"limit": limit})
+        return data.get("results", [])
+
 
 def token_expired(expires_at) -> bool:
     if expires_at is None:

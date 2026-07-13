@@ -250,9 +250,396 @@ def test_improve_directives():
     print("PASS improve directives: all 8 actions present, audience instruction forwarded, safe fallback")
 
 
+def make_identification() -> dict:
+    return {
+        "product_type": "luxury metallic digital paper / seamless texture pack",
+        "positioning": "These have a premium, interior-design feel rather than a scrapbook "
+                       "aesthetic. Position them as luxury digital papers, seamless backgrounds "
+                       "and texture overlays — that attracts higher-value buyers.",
+        "suggested_name": "Luxury Metallic Digital Paper Bundle",
+        "category": "Graphics & Digital Assets / Textures",
+        "style": "Luxury",
+        "target_buyers": ["graphic designers", "branding agencies", "invitation designers"],
+        "seo_title": "Luxury Metallic Digital Paper Bundle, Gold Silver Copper Rose Gold "
+                     "Textures, Seamless Backgrounds, Commercial Use",
+        "tags": ["gold texture", "silver texture", "metallic paper", "luxury background",
+                 "rose gold texture", "copper background", "foil digital paper",
+                 "wedding background", "branding texture", "elegant paper",
+                 "premium paper", "luxury scrapbook", "seamless texture"],
+        "collection_ideas": ["Luxe Surfaces Vol. 1 — Sculpted Plaster",
+                             "Luxe Surfaces Vol. 2 — Metallic Weaves",
+                             "Luxe Surfaces Vol. 3 — Concrete Minimalism",
+                             "Luxe Surfaces Vol. 4 — Liquid Chrome"],
+        "shop_branding_note": "'Luxe Surfaces' feels cohesive, premium and collectible — the "
+                              "shop reads as a curated design resource.",
+        "observed_details": "5 seamless metallic textures: gold foil, brushed silver, copper, "
+                            "rose gold, chrome. High-res, no text overlays.",
+    }
+
+
+def _tiny_png() -> bytes:
+    from io import BytesIO
+
+    from PIL import Image
+    buf = BytesIO()
+    Image.new("RGB", (64, 64), (200, 160, 90)).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def test_identification_schema():
+    ok = elevate.ProductIdentification.model_validate(make_identification())
+    assert len(ok.tags) == 13
+    bad = make_identification()
+    bad["tags"][0] = "way too long for an etsy tag field"
+    try:
+        elevate.ProductIdentification.model_validate(bad)
+        raise AssertionError("oversized tag must be rejected")
+    except Exception:
+        pass
+    print("PASS identification schema: 13 tags enforced, tag length enforced")
+
+
+def test_upload_identify_and_grounded_generation():
+    """Upload real images → identify (vision mocked) → product carries the
+    files → generate() attaches them as image blocks for grounding."""
+    client, headers = fresh_client()
+
+    ids = []
+    for i in range(2):
+        r = client.post("/api/growth/uploads", headers=headers,
+                        files={"file": (f"tex{i}.png", _tiny_png(), "image/png")})
+        assert r.status_code == 200, r.text
+        ids.append(r.json()["upload_id"])
+
+    ident = elevate.ProductIdentification.model_validate(make_identification())
+    seen_paths = {}
+
+    def fake_identify(paths):
+        seen_paths["paths"] = paths
+        return ident, {"tokens_in": 1, "tokens_out": 1}
+
+    with patch.object(elevate, "identify_product", fake_identify):
+        r = client.post("/api/growth/identify", headers=headers, json={"upload_ids": ids})
+    assert r.status_code == 200, r.text
+    assert r.json()["seo_title"].startswith("Luxury Metallic")
+    assert len(r.json()["tags"]) == 13
+    assert len(seen_paths["paths"]) == 2 and all(Path(p).exists() for p in seen_paths["paths"])
+
+    # unknown upload ids are rejected
+    bad = client.post("/api/growth/identify", headers=headers, json={"upload_ids": ["nope"]})
+    assert bad.status_code == 400
+
+    # product created with upload_ids carries the file paths
+    p = client.post("/api/growth/products", headers=headers,
+                    json={"name": ident.suggested_name, "category": ident.category,
+                          "style": ident.style, "upload_ids": ids})
+    assert len(p.json()["files"]) == 2
+
+    # generate() must attach the images as vision blocks
+    captured = {}
+
+    def fake_call(system, content, schema, **kw):
+        captured["content"] = content
+        return elevate.ListingResult.model_validate(make_result()), {"tokens_in": 1, "tokens_out": 1}
+
+    with patch.object(elevate, "structured_call", fake_call):
+        g = client.post("/api/growth/generate", headers=headers,
+                        json={"product_id": p.json()["id"]})
+    assert g.status_code == 200, g.text
+    content = captured["content"]
+    assert isinstance(content, list), "image-grounded generation must send content blocks"
+    image_blocks = [b for b in content if b.get("type") == "image"]
+    assert len(image_blocks) == 2
+    text_block = next(b for b in content if b.get("type") == "text")
+    assert "The attached images and files ARE the product" in text_block["text"]
+    print("PASS upload→identify→grounded generation: files stored, vision paths real, "
+          "generation received 2 image blocks")
+
+
+def test_minimal_intake_asset_analysis_and_autoname():
+    """The no-questions flow: no product name, a ZIP product file, brand style.
+    The ZIP is inventoried into the prompt, brand fields reach the brief, and
+    the product is auto-named from the generated title."""
+    import io
+    import zipfile as zf
+
+    client, headers = fresh_client()
+
+    # image (required) + zip product file (optional, kind=asset)
+    img = client.post("/api/growth/uploads", headers=headers,
+                      files={"file": ("cover.png", _tiny_png(), "image/png")})
+    zbuf = io.BytesIO()
+    with zf.ZipFile(zbuf, "w") as z:
+        for i in range(4):
+            z.writestr(f"papers/texture_{i}.png", b"fake")
+        z.writestr("README.pdf", b"fake")
+    asset = client.post("/api/growth/uploads?kind=asset", headers=headers,
+                        files={"file": ("gold-pack.zip", zbuf.getvalue(), "application/zip")})
+    assert asset.status_code == 200, asset.text
+
+    # a zip must be rejected on the default image-only kind
+    zbuf.seek(0)
+    rejected = client.post("/api/growth/uploads", headers=headers,
+                           files={"file": ("x.zip", zbuf.getvalue(), "application/zip")})
+    assert rejected.status_code == 400
+
+    p = client.post("/api/growth/products", headers=headers,
+                    json={"category": "Graphics & Digital Assets / Textures",
+                          "style": "Luxury", "brand_name": "Luxe Surfaces",
+                          "color_preferences": "gold, ivory",
+                          "file_link": "https://www.canva.com/design/abc",
+                          "upload_ids": [img.json()["upload_id"]],
+                          "asset_upload_ids": [asset.json()["upload_id"]]})
+    assert p.status_code == 200, p.text
+    assert p.json()["name"] == "Untitled product"
+    kinds = sorted(f["kind"] for f in p.json()["files"])
+    assert kinds == ["asset", "image"]
+
+    captured = {}
+
+    def fake_call(system, content, schema, **kw):
+        captured["content"] = content
+        return elevate.ListingResult.model_validate(make_result()), {"tokens_in": 1, "tokens_out": 1}
+
+    with patch.object(elevate, "structured_call", fake_call):
+        g = client.post("/api/growth/generate", headers=headers,
+                        json={"product_id": p.json()["id"]})
+    assert g.status_code == 200, g.text
+
+    content = captured["content"]
+    assert isinstance(content, list)
+    text = next(b for b in content if b.get("type") == "text")["text"]
+    assert "PRODUCT FILE CONTENTS" in text and "ZIP containing 5 files" in text
+    assert "4x .png" in text and "BRAND NAME: Luxe Surfaces" in text
+    assert "gold, ivory" in text and "canva.com" in text
+    assert "infer the best product name" in text
+
+    # product auto-named from the generated best title
+    products = client.get("/api/growth/products", headers=headers).json()
+    assert products[0]["name"].startswith("Boho Wedding Invitation Template")
+    print("PASS minimal intake: zip inventoried into prompt, brand fields briefed, "
+          "zip rejected as image, product auto-named from result")
+
+
+def test_real_identify_builds_blocks(tmp_path=None):
+    """identify_product itself: reads real pixels into base64 blocks, rejects empty."""
+    import tempfile
+    d = Path(tempfile.mkdtemp())
+    img = d / "a.png"
+    img.write_bytes(_tiny_png())
+
+    captured = {}
+
+    def fake_call(system, content, schema, **kw):
+        captured["system"] = system
+        captured["content"] = content
+        return elevate.ProductIdentification.model_validate(make_identification()), {"tokens_in": 1, "tokens_out": 1}
+
+    with patch.object(elevate, "structured_call", fake_call):
+        result, _ = elevate.identify_product([str(img)])
+    assert result.category == "Graphics & Digital Assets / Textures"
+    blocks = [b for b in captured["content"] if b.get("type") == "image"]
+    assert len(blocks) == 1 and blocks[0]["source"]["media_type"] == "image/jpeg", \
+        "images are downscaled and re-encoded as JPEG for the vision call"
+    assert "product identification engine" in captured["system"]
+
+    try:
+        elevate.identify_product([str(d / "missing.png")])
+        raise AssertionError("no readable images must raise")
+    except ValueError:
+        pass
+    print("PASS identify_product: real pixels become vision blocks, empty input rejected")
+
+
+# ------------------------------------------------------------------------------
+# Growth Lab
+# ------------------------------------------------------------------------------
+
+def make_thumb_sim() -> dict:
+    return {
+        "variations": [
+            {"n": i, "concept": f"Concept {i}", "textPlacement": "bottom band",
+             "productSize": "fills 80% of frame", "colorContrast": "warm on dark",
+             "visualHierarchy": "product → badge → text",
+             "predictedCtr": 60 + i * 4, "reasoning": "strong at 180px"}
+            for i in range(1, 6)
+        ],
+        "winner": 5, "winnerRationale": "Highest contrast and clearest hierarchy.",
+        "competitorComparison": "Competitors use flat beige mockups; this pops in the grid.",
+    }
+
+
+def make_upgrade_plan() -> dict:
+    return {
+        "currentOffer": "50 printable affirmation cards.",
+        "upgrades": [
+            {"addition": "Matching phone wallpapers", "whyItWorks": "Daily visibility",
+             "effort": "low", "valueImpact": "Feels like a lifestyle system"},
+            {"addition": "Journal prompts", "whyItWorks": "Deepens use", "effort": "low",
+             "valueImpact": "Adds a second use case"},
+            {"addition": "Printable altar cards", "whyItWorks": "Niche ritual value",
+             "effort": "medium", "valueImpact": "Premium feel"},
+            {"addition": "Canva editable version", "whyItWorks": "Personalization",
+             "effort": "medium", "valueImpact": "Justifies premium price"},
+        ],
+        "upgradedOffer": "The complete affirmation ritual kit.",
+        "priceFrom": 5.0, "priceTo": 15.0,
+        "pricingRationale": "Bundle perception triples perceived value.",
+    }
+
+
+def make_expansion_plan() -> dict:
+    return {
+        "collectionName": "Lunar Ritual Collection",
+        "ideas": [{"name": f"Product {i}", "subcategory": "Wellness & Spirituality / Manifestation journals",
+                   "whyItSells": "Same buyer, same aesthetic", "priceRange": "$6-$12"}
+                  for i in range(1, 13)],
+        "launchOrder": ["Astrology journal first — highest search volume",
+                        "Lunar planner second", "Zodiac stickers third"],
+        "crossSellStrategy": "Every listing links the collection; bundle discount on 3+.",
+    }
+
+
+def make_teardown() -> dict:
+    return {
+        "competitor": {
+            "title": "100 Page Digital Planner", "price": 9.99,
+            "tags": ["digital planner", "goodnotes planner"], "imageCount": 7,
+            "reviewSignals": ["praise: easy to use", "complaint: no editing tutorial"],
+            "strengths": ["Clean covers", "Strong review count"],
+            "weaknesses": ["No video tutorial", "Only 100 pages, no extras"],
+        },
+        "gaps": ["No editable Canva version", "No stickers included", "Weak lifestyle imagery"],
+        "positioningPlan": "Position as the complete planning system, not just a planner.",
+        "upgradedOffer": "150-page planner + stickers + trackers + editable Canva version.",
+        "data_source": "model_knowledge",
+    }
+
+
+def test_growth_lab_tools_persist():
+    """Thumbnails/upgrades/expansion run per-listing and persist into result_json."""
+    client, headers = fresh_client()
+    result = elevate.ListingResult.model_validate(make_result())
+    p = client.post("/api/growth/products", headers=headers, json={"name": "Cards"})
+    with patch.object(elevate, "generate", lambda *a, **k: (result, {"tokens_in": 1, "tokens_out": 1})):
+        g = client.post("/api/growth/generate", headers=headers,
+                        json={"product_id": p.json()["id"]})
+    lid = g.json()["listing_id"]
+
+    sim = elevate.ThumbnailSimulation.model_validate(make_thumb_sim())
+    up = elevate.UpgradePlan.model_validate(make_upgrade_plan())
+    ex = elevate.ExpansionPlan.model_validate(make_expansion_plan())
+    with patch.object(elevate, "thumbnail_simulation", lambda *a, **k: (sim, {"tokens_in": 1, "tokens_out": 1})), \
+         patch.object(elevate, "upgrade_plan", lambda *a, **k: (up, {"tokens_in": 1, "tokens_out": 1})), \
+         patch.object(elevate, "expansion_plan", lambda *a, **k: (ex, {"tokens_in": 1, "tokens_out": 1})):
+        t = client.post(f"/api/growth/listings/{lid}/thumbnails", headers=headers)
+        u = client.post(f"/api/growth/listings/{lid}/upgrades", headers=headers)
+        e = client.post(f"/api/growth/listings/{lid}/expansion", headers=headers)
+    assert t.json()["winner"] == 5
+    assert u.json()["priceTo"] == 15.0
+    assert len(e.json()["ideas"]) == 12
+
+    # persisted alongside the ListingResult and returned on later reads
+    got = client.get(f"/api/growth/listings/{lid}", headers=headers).json()["result"]
+    assert got["thumbnailSimulation"]["winner"] == 5
+    assert got["upgradePlan"]["upgradedOffer"].startswith("The complete")
+    assert got["expansionPlan"]["collectionName"] == "Lunar Ritual Collection"
+    assert got["titles"]["best"], "original ListingResult must survive the merge"
+    print("PASS Growth Lab persistence: thumbnails/upgrades/expansion stored with the listing")
+
+
+def test_beat_competitor_flow():
+    """URL parse → live facts (faked transport) → teardown + rebuilt listing,
+    provenance engine-enforced."""
+    assert elevate._parse_etsy_listing_id("https://www.etsy.com/listing/123456789/foo-bar") == "123456789"
+    assert elevate._parse_etsy_listing_id("https://www.etsy.com/uk/listing/42/x?ref=1") == "42"
+    assert elevate._parse_etsy_listing_id("https://example.com/nope") is None
+
+    client, headers = fresh_client()
+    p = client.post("/api/growth/products", headers=headers, json={"name": "My Planner"})
+
+    teardown = elevate.CompetitorTeardown.model_validate(make_teardown())
+    rebuilt = elevate.ListingResult.model_validate(
+        make_result(overall=93, best_title="Complete 150 Page Digital Planner System, Stickers + Trackers + Canva"))
+
+    def fake_beat(product, url):
+        assert "etsy.com/listing/555" in url
+        td = teardown.model_copy(deep=True)
+        td.data_source = "live_etsy_data"
+        return td, rebuilt, {"tokens_in": 2, "tokens_out": 2}
+
+    with patch.object(elevate, "beat_competitor", fake_beat):
+        r = client.post("/api/growth/beat-competitor", headers=headers,
+                        json={"product_id": p.json()["id"],
+                              "competitor_url": "https://www.etsy.com/listing/555/planner"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["teardown"]["data_source"] == "live_etsy_data"
+    assert body["teardown"]["competitor_url"].endswith("/555/planner")
+
+    got = client.get(f"/api/growth/listings/{body['listing_id']}", headers=headers).json()
+    assert got["score"] == 93
+    assert got["result"]["competitorTeardown"]["competitor"]["title"] == "100 Page Digital Planner"
+    print("PASS beat-competitor: URL parsing, new listing created with teardown attached")
+
+
+def test_fetch_competitor_facts_live_and_fallback():
+    """Live competitor fetch through a fake Etsy transport + honest fallbacks."""
+
+    class FakeT:
+        def request(self, method, url, **kw):
+            if url.endswith("/reviews"):
+                return {"results": [{"rating": 4, "review": "Love it but no tutorial included."}]}
+            return {"title": "Boho Planner", "description": "A planner.",
+                    "price": {"amount": 999, "divisor": 100},
+                    "tags": ["planner"], "num_favorers": 200, "views": 5000,
+                    "images": [{}] * 8}
+
+    with patch("app.etsy.client.EtsyClient.__init__",
+               lambda self, api_key=None, transport=None: (
+                   setattr(self, "api_key", "k") or setattr(self, "transport", FakeT()) or
+                   setattr(self, "redirect_uri", "x"))):
+        facts, source = elevate.fetch_competitor_facts("https://www.etsy.com/listing/777/x")
+    assert source == "live_etsy_data"
+    assert "Boho Planner" in facts and "$9.99" in facts and "no tutorial" in facts
+    assert "IMAGE COUNT: 8" in facts
+
+    facts2, source2 = elevate.fetch_competitor_facts("https://not-etsy.com/x")
+    assert source2 == "model_knowledge" and "could not parse" in facts2
+    print("PASS competitor facts: live fetch measured, non-Etsy URL degrades honestly")
+
+
+def test_listing_package():
+    client, headers = fresh_client()
+    result = elevate.ListingResult.model_validate(make_result())
+    p = client.post("/api/growth/products", headers=headers,
+                    json={"name": "Pack", "category": "Paper & Party Supplies / Invitations"})
+    with patch.object(elevate, "generate", lambda *a, **k: (result, {"tokens_in": 1, "tokens_out": 1})):
+        g = client.post("/api/growth/generate", headers=headers,
+                        json={"product_id": p.json()["id"]})
+    r = client.get(f"/api/growth/listings/{g.json()['listing_id']}/package", headers=headers)
+    pkg = r.json()["package"]
+    for section in ["ETSY LISTING PACKAGE", "TITLE", "DESCRIPTION", "13 TAGS",
+                    "CATEGORY", "PRICING", "CUSTOMER AVATAR", "PRODUCT POSITIONING",
+                    "FILE DELIVERY INSTRUCTIONS", "10 LISTING IMAGES"]:
+        assert section in pkg, section
+    assert "Paper & Party Supplies / Invitations" in pkg
+    assert "boho wedding invite" in pkg  # tags made it in
+    assert pkg.count("Psychology:") == 10
+    print("PASS one-click package: all 9 sections present, 10 image briefs included")
+
+
 if __name__ == "__main__":
     test_result_schema_hard_rules()
     test_full_api_flow()
     test_quota_enforced()
     test_improve_directives()
+    test_identification_schema()
+    test_upload_identify_and_grounded_generation()
+    test_minimal_intake_asset_analysis_and_autoname()
+    test_real_identify_builds_blocks()
+    test_growth_lab_tools_persist()
+    test_beat_competitor_flow()
+    test_fetch_competitor_facts_live_and_fallback()
+    test_listing_package()
     print("\nALL GROWTH TESTS PASSED")

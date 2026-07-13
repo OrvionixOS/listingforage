@@ -41,6 +41,20 @@ export interface AuthUser {
   email: string;
 }
 
+export interface ProductIdentification {
+  product_type: string;
+  positioning: string;
+  suggested_name: string;
+  category: string;
+  style: string;
+  target_buyers: string[];
+  seo_title: string;
+  tags: string[];
+  collection_ideas: string[];
+  shop_branding_note: string;
+  observed_details: string;
+}
+
 export const api = {
   // auth
   signUp: (email: string, password: string) =>
@@ -55,14 +69,44 @@ export const api = {
     }),
   me: () => request<AuthUser>("/api/auth/me"),
 
+  // uploads + vision identification
+  uploadImage: async (file: File, kind: "image" | "asset" = "image") => {
+    const form = new FormData();
+    form.append("file", file);
+    const headers: Record<string, string> = {};
+    const token = getToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`/api/growth/uploads?kind=${kind}`, { method: "POST", headers, body: form });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try {
+        detail = (await res.json()).detail || detail;
+      } catch {
+        /* not json */
+      }
+      throw new Error(detail);
+    }
+    return (await res.json()) as { upload_id: string; filename: string };
+  },
+  identify: (uploadIds: string[]) =>
+    request<ProductIdentification>("/api/growth/identify", {
+      method: "POST",
+      body: JSON.stringify({ upload_ids: uploadIds }),
+    }),
+
   // products
   products: () => request<ProductRow[]>("/api/growth/products"),
   createProduct: (body: {
-    name: string;
+    name?: string | null;
     category?: string | null;
     style?: string | null;
     target_audience?: string | null;
     notes?: string | null;
+    brand_name?: string | null;
+    color_preferences?: string | null;
+    file_link?: string | null;
+    upload_ids?: string[];
+    asset_upload_ids?: string[];
   }) => request<ProductRow>("/api/growth/products", { method: "POST", body: JSON.stringify(body) }),
 
   // generation
@@ -76,6 +120,21 @@ export const api = {
       `/api/growth/listings/${listingId}/improve`,
       { method: "POST", body: JSON.stringify(body) },
     ),
+
+  // Growth Lab
+  thumbnails: (listingId: string) =>
+    request<import("./types").ThumbnailSimulation>(`/api/growth/listings/${listingId}/thumbnails`, { method: "POST" }),
+  upgrades: (listingId: string) =>
+    request<import("./types").UpgradePlan>(`/api/growth/listings/${listingId}/upgrades`, { method: "POST" }),
+  expansion: (listingId: string) =>
+    request<import("./types").ExpansionPlan>(`/api/growth/listings/${listingId}/expansion`, { method: "POST" }),
+  beatCompetitor: (body: { product_id: string; competitor_url: string }) =>
+    request<{ listing_id: string; teardown: import("./types").CompetitorTeardown }>(
+      "/api/growth/beat-competitor",
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  listingPackage: (listingId: string) =>
+    request<{ package: string }>(`/api/growth/listings/${listingId}/package`),
 
   // listings
   listings: () => request<ListingRow[]>("/api/growth/listings"),

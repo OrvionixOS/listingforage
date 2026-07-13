@@ -314,6 +314,21 @@ export function BrandSection({ result }: { result: ListingResult }) {
         <div><h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Expansion ideas</h4><Bullets items={b?.expansionIdeas} /></div>
         <div><h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Consistency guidelines</h4><Bullets items={b?.consistencyGuidelines} /></div>
       </div>
+      {(b?.shopBannerConcept || b?.shopIconConcept || (b?.listingStyleGuide?.length ?? 0) > 0) ? (
+        <div className="mt-6 border-t border-border pt-5">
+          <h4 className="mb-3 text-sm font-semibold">Complete shop kit</h4>
+          <div className="grid gap-4 sm:grid-cols-2">
+            {b?.shopBannerConcept ? <Stat icon={Layers} label="Shop banner" value={b.shopBannerConcept} /> : null}
+            {b?.shopIconConcept ? <Stat icon={Sparkles} label="Shop icon" value={b.shopIconConcept} /> : null}
+          </div>
+          {(b?.listingStyleGuide?.length ?? 0) > 0 && (
+            <div className="mt-4">
+              <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Listing style guide</h4>
+              <Bullets items={b?.listingStyleGuide} />
+            </div>
+          )}
+        </div>
+      ) : null}
     </SectionCard>
   );
 }

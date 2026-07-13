@@ -18,24 +18,36 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from .. import elevate
 from ..auth import get_current_user
 from ..billing import check_quota, record_usage
-from ..database import GrowthListing, Product, Profile, User, get_db
+from ..database import GrowthListing, Product, Profile, Upload, User, get_db
+from ..storage import storage
 
 router = APIRouter(prefix="/api/growth", tags=["growth"])
 
 
 class ProductCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=300)
+    # Minimal-question intake: everything optional except the images —
+    # the product itself provides the information.
+    name: str | None = Field(default=None, max_length=300)
     category: str | None = None
     style: str | None = None
     target_audience: str | None = None
     notes: str | None = None
+    brand_name: str | None = None
+    color_preferences: str | None = None
+    file_link: str | None = None
+    upload_ids: list[str] = Field(default_factory=list)
+    asset_upload_ids: list[str] = Field(default_factory=list)
+
+
+class IdentifyBody(BaseModel):
+    upload_ids: list[str] = Field(min_length=1)
 
 
 class GenerateBody(BaseModel):
@@ -47,6 +59,11 @@ class GenerateBody(BaseModel):
 class ImproveBody(BaseModel):
     action: str
     instruction: str = ""
+
+
+class BeatCompetitorBody(BaseModel):
+    product_id: str
+    competitor_url: str = Field(min_length=8)
 
 
 class ProfileBody(BaseModel):
@@ -79,13 +96,66 @@ def _owned_listing(listing_id: str, user: User, db: Session) -> GrowthListing:
     return l
 
 
+# --- uploads + vision identification ------------------------------------------
+
+def _owned_uploads(upload_ids: list[str], user: User, db: Session) -> list[Upload]:
+    rows = (db.query(Upload)
+            .filter(Upload.user_id == user.id, Upload.id.in_(upload_ids)).all())
+    if not rows:
+        raise HTTPException(400, "Upload your product images first.")
+    return rows
+
+
+@router.post("/uploads")
+async def upload_image(file: UploadFile, kind: str = "image",
+                       user: User = Depends(get_current_user),
+                       db: Session = Depends(get_db)):
+    """kind=image (default): product images. kind=asset: the product file
+    itself (PDF / ZIP / SVG) so the AI can read what's actually included."""
+    try:
+        upload_id, path = await storage.save_upload(user.id, file,
+                                                    allow_assets=(kind == "asset"))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    db.add(Upload(id=upload_id, user_id=user.id, filename=file.filename or "upload",
+                  content_type=file.content_type or "image/png", path=path))
+    db.commit()
+    return {"upload_id": upload_id, "filename": file.filename, "kind": kind}
+
+
+@router.post("/identify")
+def identify(body: IdentifyBody, user: User = Depends(get_current_user),
+             db: Session = Depends(get_db)):
+    """Vision pass over the uploaded images: what IS this product, how to
+    position it, plus a ready SEO title, 13 tags and collection branding."""
+    uploads = _owned_uploads(body.upload_ids, user, db)
+    try:
+        result, usage = elevate.identify_product([u.path for u in uploads])
+    except Exception as exc:
+        raise HTTPException(502, f"Image analysis failed: {exc}")
+    return result.model_dump(mode="json")
+
+
 # --- products ----------------------------------------------------------------
 
 @router.post("/products")
 def create_product(body: ProductCreate, user: User = Depends(get_current_user),
                    db: Session = Depends(get_db)):
-    p = Product(user_id=user.id, name=body.name.strip(), category=body.category,
-                style=body.style, target_audience=body.target_audience, notes=body.notes)
+    files = []
+    if body.upload_ids:
+        files += [{"upload_id": u.id, "name": u.filename, "type": u.content_type,
+                   "path": u.path, "size": 0, "kind": "image"}
+                  for u in _owned_uploads(body.upload_ids, user, db)]
+    if body.asset_upload_ids:
+        files += [{"upload_id": u.id, "name": u.filename, "type": u.content_type,
+                   "path": u.path, "size": 0, "kind": "asset"}
+                  for u in _owned_uploads(body.asset_upload_ids, user, db)]
+    p = Product(user_id=user.id,
+                name=(body.name or "").strip() or "Untitled product",
+                category=body.category, style=body.style,
+                target_audience=body.target_audience, notes=body.notes,
+                brand_name=body.brand_name, color_preferences=body.color_preferences,
+                file_link=body.file_link, files=files)
     db.add(p)
     db.commit()
     return _product_dict(p)
@@ -121,6 +191,9 @@ def generate(body: GenerateBody, user: User = Depends(get_current_user),
         status="generated", score=result.scores.overall,
         result_json=result.model_dump(mode="json"))
     db.add(listing)
+    # minimal-question flow: if the seller never named the product, the AI did
+    if product.name == "Untitled product":
+        product.name = result.titles.best[:120]
     db.commit()
     record_usage(db, user, listing.id, usage)
     return {"listing_id": listing.id, "result": listing.result_json}
@@ -146,6 +219,106 @@ def improve(listing_id: str, body: ImproveBody,
     db.commit()
     record_usage(db, user, listing.id, usage)
     return {"listing_id": listing.id, "result": listing.result_json}
+
+
+# --- Growth Lab: thumbnails, upgrades, expansion, beat-competitor, package -----
+
+def _product_for(listing: GrowthListing, db: Session):
+    product = db.get(Product, listing.product_id) if listing.product_id else None
+    if product is None:
+        product = SimpleNamespace(name=listing.title, category=None, style=None,
+                                  target_audience=None, notes=None, files=[],
+                                  brand_name=None, color_preferences=None, file_link=None)
+    return product
+
+
+def _merge_result(db: Session, listing: GrowthListing, key: str, value: dict) -> None:
+    """Persist a Growth Lab result alongside the ListingResult (JSON column
+    needs reassignment, not mutation, to be detected)."""
+    merged = dict(listing.result_json or {})
+    merged[key] = value
+    listing.result_json = merged
+    db.commit()
+
+
+@router.post("/listings/{listing_id}/thumbnails")
+def thumbnails(listing_id: str, user: User = Depends(get_current_user),
+               db: Session = Depends(get_db)):
+    listing = _owned_listing(listing_id, user, db)
+    try:
+        sim, usage = elevate.thumbnail_simulation(_product_for(listing, db), listing.result_json)
+    except Exception as exc:
+        raise HTTPException(502, f"Thumbnail simulation failed: {exc}")
+    data = sim.model_dump(mode="json")
+    _merge_result(db, listing, "thumbnailSimulation", data)
+    record_usage(db, user, listing.id, usage)
+    return data
+
+
+@router.post("/listings/{listing_id}/upgrades")
+def upgrades(listing_id: str, user: User = Depends(get_current_user),
+             db: Session = Depends(get_db)):
+    listing = _owned_listing(listing_id, user, db)
+    try:
+        plan, usage = elevate.upgrade_plan(_product_for(listing, db), listing.result_json)
+    except Exception as exc:
+        raise HTTPException(502, f"Upgrade generation failed: {exc}")
+    data = plan.model_dump(mode="json")
+    _merge_result(db, listing, "upgradePlan", data)
+    record_usage(db, user, listing.id, usage)
+    return data
+
+
+@router.post("/listings/{listing_id}/expansion")
+def expansion(listing_id: str, user: User = Depends(get_current_user),
+              db: Session = Depends(get_db)):
+    listing = _owned_listing(listing_id, user, db)
+    try:
+        plan, usage = elevate.expansion_plan(_product_for(listing, db), listing.result_json)
+    except Exception as exc:
+        raise HTTPException(502, f"Expansion planning failed: {exc}")
+    data = plan.model_dump(mode="json")
+    _merge_result(db, listing, "expansionPlan", data)
+    record_usage(db, user, listing.id, usage)
+    return data
+
+
+@router.post("/beat-competitor")
+def beat_competitor(body: BeatCompetitorBody, user: User = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
+    """Paste a competitor Etsy listing URL → live teardown → the seller's
+    entire listing rebuilt to outperform it. Creates a NEW listing."""
+    product = db.get(Product, body.product_id)
+    if product is None or product.user_id != user.id:
+        raise HTTPException(404, "Product not found.")
+    ok, quota = check_quota(db, user)
+    if not ok:
+        raise HTTPException(402, f"Monthly listing quota reached ({quota['used']}/{quota['limit']}). Upgrade to continue.")
+    try:
+        teardown, result, usage = elevate.beat_competitor(product, body.competitor_url)
+    except Exception as exc:
+        raise HTTPException(502, f"Beat-competitor run failed: {exc}")
+
+    merged = result.model_dump(mode="json")
+    merged["competitorTeardown"] = teardown.model_dump(mode="json")
+    merged["competitorTeardown"]["competitor_url"] = body.competitor_url
+    listing = GrowthListing(
+        user_id=user.id, product_id=product.id,
+        title=result.titles.best[:200] or product.name,
+        status="generated", score=result.scores.overall, result_json=merged)
+    db.add(listing)
+    db.commit()
+    record_usage(db, user, listing.id, usage)
+    return {"listing_id": listing.id, "teardown": merged["competitorTeardown"],
+            "result": merged}
+
+
+@router.get("/listings/{listing_id}/package")
+def listing_package(listing_id: str, user: User = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
+    """One-click Etsy listing package: everything ready to upload, as text."""
+    listing = _owned_listing(listing_id, user, db)
+    return {"package": elevate.build_package(_product_for(listing, db), listing.result_json)}
 
 
 # --- listings -----------------------------------------------------------------
