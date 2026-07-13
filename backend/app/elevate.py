@@ -8,6 +8,12 @@ description, 13 tags, keywords, attributes, pricing, a 10-image visual
 merchandising plan, a 10-dimension score set, and priority recommendations —
 exactly the shape the UI renders (frontend/src/lib/types.ts).
 
+VISION: identify_product() looks at the actual uploaded product images and
+answers "what IS this?" — product type, premium positioning, a suggested
+product name, an SEO title, 13 tags, target buyers, and branded collection
+ideas — and generate() attaches the same images so the full listing is
+grounded in the real pixels, not just the seller's description.
+
 Grounding upgrade over the original: when ETSY_API_KEY is configured, the
 live market snapshot (real prices, real title terms, real tags) is injected
 into the prompt so the market sections reflect what is actually ranking on
@@ -15,10 +21,46 @@ Etsy right now. Behavior and output shape are unchanged.
 """
 from __future__ import annotations
 
+import base64
+from pathlib import Path
+
 from pydantic import BaseModel, Field, field_validator
 
 from .etsy.market_research import fetch_market_snapshot
 from .pipeline.llm import structured_call
+
+MEDIA_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+               ".png": "image/png", ".webp": "image/webp", ".gif": "image/gif"}
+MAX_VISION_IMAGES = 8
+MAX_VISION_EDGE = 1568  # Anthropic's optimal max image edge
+
+
+def _image_blocks(image_paths: list[str]) -> list[dict]:
+    """Product images → vision blocks. Downscaled + re-encoded as JPEG so a
+    pack of multi-MB PNGs doesn't balloon the request (detail at 1568px is
+    plenty for identification and grounding)."""
+    blocks = []
+    for p in image_paths[:MAX_VISION_IMAGES]:
+        path = Path(p)
+        if not path.exists() or path.suffix.lower() not in MEDIA_TYPES:
+            continue
+        try:
+            import io
+
+            from PIL import Image
+            img = Image.open(path)
+            img.thumbnail((MAX_VISION_EDGE, MAX_VISION_EDGE))
+            buf = io.BytesIO()
+            img.convert("RGB").save(buf, "JPEG", quality=85)
+            data, media = buf.getvalue(), "image/jpeg"
+        except Exception:
+            data, media = path.read_bytes(), MEDIA_TYPES[path.suffix.lower()]
+        blocks.append({
+            "type": "image",
+            "source": {"type": "base64", "media_type": media,
+                       "data": base64.b64encode(data).decode()},
+        })
+    return blocks
 
 
 # --- ListingResult schema (field names mirror the frontend types exactly) ---
@@ -181,6 +223,89 @@ class ListingResult(BaseModel):
         return v
 
 
+# --- vision product identification -------------------------------------------
+
+PRODUCT_CATEGORIES = [
+    "Printable Artwork", "Digital Planner", "Template", "Invitation",
+    "SVG File", "Cricut File", "Font", "Branding Kit", "Social Media Template",
+    "Business Template", "Wedding Product", "Educational Product",
+    "Digital Download", "Pattern", "Worksheet", "Mockup", "Design Bundle",
+]
+
+
+class ProductIdentification(BaseModel):
+    """What the uploaded images actually are, and how to sell them."""
+    product_type: str = Field(
+        description="Plain naming of what these images are, e.g. 'luxury metallic digital paper / seamless texture pack'.")
+    positioning: str = Field(
+        description="2-4 sentences: the aesthetic these images actually have, how to position them "
+                    "(e.g. premium interior-design feel vs scrapbook craft), and which higher-value "
+                    "buyers that positioning attracts.")
+    suggested_name: str = Field(description="A concise product name for the shop's own records.")
+    category: str = Field(description=f"The best fit from: {', '.join(PRODUCT_CATEGORIES)}")
+    style: str = Field(description="Dominant visual style, e.g. Luxury, Minimal, Boho.")
+    target_buyers: list[str] = Field(
+        min_length=2, description="Specific buyer segments this positioning attracts.")
+    seo_title: str = Field(
+        max_length=140,
+        description="A strong ready-to-use Etsy title, keyword-front-loaded, <=140 chars.")
+    tags: list[str] = Field(
+        min_length=13, max_length=13,
+        description="EXACTLY 13 Etsy tags, each <=20 chars, lowercase buyer-search phrases.")
+    collection_ideas: list[str] = Field(
+        min_length=4,
+        description="Branded, collectible product-line names for scaling a whole shop around this "
+                    "style, e.g. 'Luxe Surfaces Vol. 1 — Sculpted Plaster'. Same series name across all.")
+    shop_branding_note: str = Field(
+        description="1-2 sentences on why the collection naming works (cohesive, premium, collectible).")
+    observed_details: str = Field(
+        description="Objective inventory of what the images show: how many designs, colors, finishes, "
+                    "textures, any visible text/mockups. Used to ground the full listing generation.")
+
+    @field_validator("tags")
+    @classmethod
+    def tags_etsy_legal(cls, v: list[str]) -> list[str]:
+        for t in v:
+            if len(t) > 20:
+                raise ValueError(f"Etsy tag over 20 chars: {t!r}")
+        return v
+
+
+IDENTIFY_SYSTEM = (
+    "You are Etsy Growth AI's product identification engine — an expert Etsy "
+    "strategist and merchandiser LOOKING AT the seller's actual product images. "
+    "Identify what the product really is from the pixels, then position it for "
+    "the HIGHEST-VALUE buyer segment its aesthetic can credibly attract (e.g. "
+    "premium interior-design feel -> luxury digital papers / seamless "
+    "backgrounds / texture overlays for designers and branding agencies, rather "
+    "than scrapbook craft supplies).\n\n"
+    "RULES:\n"
+    "- Describe only what is visibly in the images; never invent contents.\n"
+    "- seo_title: keyword-front-loaded, natural, <=140 chars, names the product "
+    "type, key colors/finishes, and commercial use when plausible.\n"
+    "- tags: EXACTLY 13, each <=20 characters, lowercase buyer-search phrases.\n"
+    "- collection_ideas: one cohesive series brand across all entries "
+    "(e.g. 'Luxe Surfaces Vol. 1 — Sculpted Plaster', 'Vol. 2 — Metallic "
+    "Weaves'), so the shop reads as a curated design resource.\n"
+    "- category MUST be one of the provided options.\n"
+    "Respond with strict JSON only."
+)
+
+
+def identify_product(image_paths: list[str]) -> tuple[ProductIdentification, dict]:
+    """Vision pass: what are these images, and how should they be sold?"""
+    blocks = _image_blocks(image_paths)
+    if not blocks:
+        raise ValueError("No readable images provided.")
+    content = blocks + [{
+        "type": "text",
+        "text": (f"These {len(blocks)} images are a seller's digital product files. "
+                 "Identify the product and produce the identification report."),
+    }]
+    return structured_call(IDENTIFY_SYSTEM, content, ProductIdentification,
+                           max_tokens=3000, temperature=0.6)
+
+
 # --- prompts (faithful to the original engine, run on Claude) ----------------
 
 SYSTEM_PROMPT = (
@@ -246,13 +371,23 @@ def generate(product, competitors: str = "", keywords: str = "") -> tuple[Listin
         f"EXISTING KEYWORDS TO CONSIDER:\n{keywords}" if keywords else "",
     ]))
     market = _market_block(product.name)
-    content = (
+    text = (
         "Analyze this digital product and produce a complete, optimized Etsy "
         "listing strategy designed to outperform current best-sellers.\n\n"
         + build_product_brief(product)
         + (f"\n\n{extra}" if extra else "")
         + (f"\n\n{market}" if market else "")
     )
+    # ground the whole listing in the real product images when we have them
+    paths = [f.get("path") for f in (product.files or [])
+             if isinstance(f, dict) and f.get("path")]
+    blocks = _image_blocks(paths) if paths else []
+    if blocks:
+        text = ("The attached images ARE the product — ground every claim in "
+                "what they actually show.\n\n" + text)
+        content: str | list = blocks + [{"type": "text", "text": text}]
+    else:
+        content = text
     return structured_call(SYSTEM_PROMPT, content, ListingResult,
                            max_tokens=20000, temperature=0.8)
 

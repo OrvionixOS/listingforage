@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { Wand2, Loader2, Sparkles } from "lucide-react";
+import { Wand2, Loader2, Sparkles, ImagePlus, ScanSearch, Layers } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/dashboard-shell";
-import { api } from "@/lib/api";
+import { CopyButton, Chips } from "@/components/listing-sections";
+import { api, type ProductIdentification } from "@/lib/api";
 import { PRODUCT_CATEGORIES, STYLE_OPTIONS } from "@/lib/categories";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -19,9 +20,21 @@ export const Route = createFileRoute("/_authenticated/generate")({
 
 const STEPS = ["Analyzing your product", "Researching the market", "Studying competitors", "Writing your optimized listing", "Planning 10 conversion images"];
 
+interface Uploaded {
+  uploadId: string;
+  name: string;
+  previewUrl: string;
+}
+
 function Generate() {
   const navigate = useNavigate();
   const qc = useQueryClient();
+
+  // images + identification
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [images, setImages] = useState<Uploaded[]>([]);
+  const [identifying, setIdentifying] = useState(false);
+  const [ident, setIdent] = useState<ProductIdentification | null>(null);
 
   const [name, setName] = useState("");
   const [category, setCategory] = useState<string>("");
@@ -32,6 +45,41 @@ function Generate() {
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [step, setStep] = useState(0);
+
+  const addFiles = async (list: FileList | null) => {
+    if (!list?.length) return;
+    try {
+      const added: Uploaded[] = [];
+      for (const f of Array.from(list)) {
+        const r = await api.uploadImage(f);
+        added.push({ uploadId: r.upload_id, name: f.name, previewUrl: URL.createObjectURL(f) });
+      }
+      setImages((p) => [...p, ...added]);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Upload failed");
+    }
+  };
+
+  const identify = async () => {
+    if (images.length === 0) return toast.error("Add your product images first.");
+    setIdentifying(true);
+    try {
+      const r = await api.identify(images.map((i) => i.uploadId));
+      setIdent(r);
+      // auto-fill the brief from what the AI saw
+      setName(r.suggested_name);
+      if (PRODUCT_CATEGORIES.includes(r.category as (typeof PRODUCT_CATEGORIES)[number])) setCategory(r.category);
+      if (STYLE_OPTIONS.includes(r.style as (typeof STYLE_OPTIONS)[number])) setStyle(r.style);
+      setAudience(r.target_buyers.join(", "));
+      setKeywords(r.tags.join(", "));
+      setNotes(r.observed_details);
+      toast.success("Product identified — brief filled in for you.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Image analysis failed");
+    } finally {
+      setIdentifying(false);
+    }
+  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -46,6 +94,7 @@ function Generate() {
         style,
         target_audience: audience || null,
         notes: notes || null,
+        upload_ids: images.map((i) => i.uploadId),
       });
 
       const res = await api.generate({ product_id: product.id, competitors, keywords });
@@ -83,7 +132,100 @@ function Generate() {
 
   return (
     <div>
-      <PageHeader title="Generate a Listing" description="Tell us about your digital product. Our AI handles the research, SEO, copywriting, brand and image strategy." />
+      <PageHeader title="Generate a Listing" description="Drop in your product images — the AI identifies what it is, positions it, and handles the research, SEO, copywriting, brand and image strategy." />
+
+      {/* Step 1 — images + identification */}
+      <Card className="mb-5 p-6">
+        <h3 className="flex items-center gap-2 text-sm font-semibold">
+          <ImagePlus className="h-4 w-4 text-primary" /> Product images
+          <span className="font-normal text-muted-foreground">— let the AI see what you're selling</span>
+        </h3>
+        <div
+          className="mt-4 grid cursor-pointer place-items-center rounded-xl border border-dashed border-border bg-secondary/30 px-6 py-10 text-center text-sm text-muted-foreground transition-colors hover:bg-secondary/50"
+          role="button"
+          tabIndex={0}
+          onClick={() => fileInput.current?.click()}
+          onKeyDown={(e) => e.key === "Enter" && fileInput.current?.click()}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            e.preventDefault();
+            addFiles(e.dataTransfer.files);
+          }}
+        >
+          {images.length === 0
+            ? "Tap to choose your product images, or drag them here (JPG / PNG / WebP)"
+            : `${images.length} image${images.length > 1 ? "s" : ""} added — tap to add more`}
+        </div>
+        <input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp" multiple hidden onChange={(e) => addFiles(e.target.files)} />
+        {images.length > 0 && (
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            {images.slice(0, 12).map((f) => (
+              <img key={f.uploadId} src={f.previewUrl} alt={f.name} className="h-16 w-16 rounded-lg border border-border object-cover" />
+            ))}
+            {images.length > 12 && <span className="text-xs text-muted-foreground">+{images.length - 12} more</span>}
+          </div>
+        )}
+        <Button type="button" className="mt-4 gradient-primary text-primary-foreground shadow-glow hover:opacity-90" disabled={identifying || images.length === 0} onClick={identify}>
+          {identifying ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScanSearch className="h-4 w-4" />}
+          {identifying ? "Looking at your images…" : "Identify my product"}
+        </Button>
+      </Card>
+
+      {/* Identification result */}
+      {ident && (
+        <Card className="mb-5 space-y-5 p-6">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="grid h-8 w-8 place-items-center rounded-lg gradient-primary text-primary-foreground">
+                <Sparkles className="h-4 w-4" />
+              </span>
+              <h3 className="font-display text-base font-semibold">{ident.product_type}</h3>
+            </div>
+            <p className="mt-3 text-sm text-muted-foreground">{ident.positioning}</p>
+          </div>
+
+          <div className="rounded-xl border border-primary/30 bg-primary/5 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-primary">Strong Etsy title</h4>
+                <p className="mt-1 text-sm font-medium">{ident.seo_title}</p>
+              </div>
+              <CopyButton text={ident.seo_title} />
+            </div>
+          </div>
+
+          <div className="grid gap-5 sm:grid-cols-2">
+            <div>
+              <div className="mb-2 flex items-center justify-between">
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Keywords (13 Etsy tags)</h4>
+                <CopyButton text={ident.tags.join(", ")} label="Copy all" />
+              </div>
+              <Chips items={ident.tags} />
+            </div>
+            <div>
+              <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Who this attracts</h4>
+              <Chips items={ident.target_buyers} />
+            </div>
+          </div>
+
+          <div>
+            <h4 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              <Layers className="h-3.5 w-3.5" /> Build a shop around this style
+            </h4>
+            <ul className="space-y-1.5">
+              {ident.collection_ideas.map((c, i) => (
+                <li key={i} className="flex gap-2.5 text-sm text-muted-foreground">
+                  <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
+                  <span>{c}</span>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-3 text-xs text-muted-foreground">{ident.shop_branding_note}</p>
+          </div>
+        </Card>
+      )}
+
+      {/* Step 2 — the brief (auto-filled by identification) */}
       <form onSubmit={submit} className="grid gap-5 lg:grid-cols-3">
         <Card className="space-y-4 p-6 lg:col-span-2">
           <div className="space-y-2">

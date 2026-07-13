@@ -250,9 +250,148 @@ def test_improve_directives():
     print("PASS improve directives: all 8 actions present, audience instruction forwarded, safe fallback")
 
 
+def make_identification() -> dict:
+    return {
+        "product_type": "luxury metallic digital paper / seamless texture pack",
+        "positioning": "These have a premium, interior-design feel rather than a scrapbook "
+                       "aesthetic. Position them as luxury digital papers, seamless backgrounds "
+                       "and texture overlays — that attracts higher-value buyers.",
+        "suggested_name": "Luxury Metallic Digital Paper Bundle",
+        "category": "Digital Download",
+        "style": "Luxury",
+        "target_buyers": ["graphic designers", "branding agencies", "invitation designers"],
+        "seo_title": "Luxury Metallic Digital Paper Bundle, Gold Silver Copper Rose Gold "
+                     "Textures, Seamless Backgrounds, Commercial Use",
+        "tags": ["gold texture", "silver texture", "metallic paper", "luxury background",
+                 "rose gold texture", "copper background", "foil digital paper",
+                 "wedding background", "branding texture", "elegant paper",
+                 "premium paper", "luxury scrapbook", "seamless texture"],
+        "collection_ideas": ["Luxe Surfaces Vol. 1 — Sculpted Plaster",
+                             "Luxe Surfaces Vol. 2 — Metallic Weaves",
+                             "Luxe Surfaces Vol. 3 — Concrete Minimalism",
+                             "Luxe Surfaces Vol. 4 — Liquid Chrome"],
+        "shop_branding_note": "'Luxe Surfaces' feels cohesive, premium and collectible — the "
+                              "shop reads as a curated design resource.",
+        "observed_details": "5 seamless metallic textures: gold foil, brushed silver, copper, "
+                            "rose gold, chrome. High-res, no text overlays.",
+    }
+
+
+def _tiny_png() -> bytes:
+    from io import BytesIO
+
+    from PIL import Image
+    buf = BytesIO()
+    Image.new("RGB", (64, 64), (200, 160, 90)).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def test_identification_schema():
+    ok = elevate.ProductIdentification.model_validate(make_identification())
+    assert len(ok.tags) == 13
+    bad = make_identification()
+    bad["tags"][0] = "way too long for an etsy tag field"
+    try:
+        elevate.ProductIdentification.model_validate(bad)
+        raise AssertionError("oversized tag must be rejected")
+    except Exception:
+        pass
+    print("PASS identification schema: 13 tags enforced, tag length enforced")
+
+
+def test_upload_identify_and_grounded_generation():
+    """Upload real images → identify (vision mocked) → product carries the
+    files → generate() attaches them as image blocks for grounding."""
+    client, headers = fresh_client()
+
+    ids = []
+    for i in range(2):
+        r = client.post("/api/growth/uploads", headers=headers,
+                        files={"file": (f"tex{i}.png", _tiny_png(), "image/png")})
+        assert r.status_code == 200, r.text
+        ids.append(r.json()["upload_id"])
+
+    ident = elevate.ProductIdentification.model_validate(make_identification())
+    seen_paths = {}
+
+    def fake_identify(paths):
+        seen_paths["paths"] = paths
+        return ident, {"tokens_in": 1, "tokens_out": 1}
+
+    with patch.object(elevate, "identify_product", fake_identify):
+        r = client.post("/api/growth/identify", headers=headers, json={"upload_ids": ids})
+    assert r.status_code == 200, r.text
+    assert r.json()["seo_title"].startswith("Luxury Metallic")
+    assert len(r.json()["tags"]) == 13
+    assert len(seen_paths["paths"]) == 2 and all(Path(p).exists() for p in seen_paths["paths"])
+
+    # unknown upload ids are rejected
+    bad = client.post("/api/growth/identify", headers=headers, json={"upload_ids": ["nope"]})
+    assert bad.status_code == 400
+
+    # product created with upload_ids carries the file paths
+    p = client.post("/api/growth/products", headers=headers,
+                    json={"name": ident.suggested_name, "category": ident.category,
+                          "style": ident.style, "upload_ids": ids})
+    assert len(p.json()["files"]) == 2
+
+    # generate() must attach the images as vision blocks
+    captured = {}
+
+    def fake_call(system, content, schema, **kw):
+        captured["content"] = content
+        return elevate.ListingResult.model_validate(make_result()), {"tokens_in": 1, "tokens_out": 1}
+
+    with patch.object(elevate, "structured_call", fake_call):
+        g = client.post("/api/growth/generate", headers=headers,
+                        json={"product_id": p.json()["id"]})
+    assert g.status_code == 200, g.text
+    content = captured["content"]
+    assert isinstance(content, list), "image-grounded generation must send content blocks"
+    image_blocks = [b for b in content if b.get("type") == "image"]
+    assert len(image_blocks) == 2
+    text_block = next(b for b in content if b.get("type") == "text")
+    assert "The attached images ARE the product" in text_block["text"]
+    print("PASS upload→identify→grounded generation: files stored, vision paths real, "
+          "generation received 2 image blocks")
+
+
+def test_real_identify_builds_blocks(tmp_path=None):
+    """identify_product itself: reads real pixels into base64 blocks, rejects empty."""
+    import tempfile
+    d = Path(tempfile.mkdtemp())
+    img = d / "a.png"
+    img.write_bytes(_tiny_png())
+
+    captured = {}
+
+    def fake_call(system, content, schema, **kw):
+        captured["system"] = system
+        captured["content"] = content
+        return elevate.ProductIdentification.model_validate(make_identification()), {"tokens_in": 1, "tokens_out": 1}
+
+    with patch.object(elevate, "structured_call", fake_call):
+        result, _ = elevate.identify_product([str(img)])
+    assert result.category == "Digital Download"
+    blocks = [b for b in captured["content"] if b.get("type") == "image"]
+    assert len(blocks) == 1 and blocks[0]["source"]["media_type"] == "image/jpeg", \
+        "images are downscaled and re-encoded as JPEG for the vision call"
+    assert "product identification engine" in captured["system"]
+
+    try:
+        elevate.identify_product([str(d / "missing.png")])
+        raise AssertionError("no readable images must raise")
+    except ValueError:
+        pass
+    print("PASS identify_product: real pixels become vision blocks, empty input rejected")
+
+
 if __name__ == "__main__":
     test_result_schema_hard_rules()
     test_full_api_flow()
     test_quota_enforced()
     test_improve_directives()
+    test_identification_schema()
+    test_upload_identify_and_grounded_generation()
+    test_real_identify_builds_blocks()
     print("\nALL GROWTH TESTS PASSED")

@@ -41,6 +41,20 @@ export interface AuthUser {
   email: string;
 }
 
+export interface ProductIdentification {
+  product_type: string;
+  positioning: string;
+  suggested_name: string;
+  category: string;
+  style: string;
+  target_buyers: string[];
+  seo_title: string;
+  tags: string[];
+  collection_ideas: string[];
+  shop_branding_note: string;
+  observed_details: string;
+}
+
 export const api = {
   // auth
   signUp: (email: string, password: string) =>
@@ -55,6 +69,31 @@ export const api = {
     }),
   me: () => request<AuthUser>("/api/auth/me"),
 
+  // uploads + vision identification
+  uploadImage: async (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    const headers: Record<string, string> = {};
+    const token = getToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch("/api/growth/uploads", { method: "POST", headers, body: form });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try {
+        detail = (await res.json()).detail || detail;
+      } catch {
+        /* not json */
+      }
+      throw new Error(detail);
+    }
+    return (await res.json()) as { upload_id: string; filename: string };
+  },
+  identify: (uploadIds: string[]) =>
+    request<ProductIdentification>("/api/growth/identify", {
+      method: "POST",
+      body: JSON.stringify({ upload_ids: uploadIds }),
+    }),
+
   // products
   products: () => request<ProductRow[]>("/api/growth/products"),
   createProduct: (body: {
@@ -63,6 +102,7 @@ export const api = {
     style?: string | null;
     target_audience?: string | null;
     notes?: string | null;
+    upload_ids?: string[];
   }) => request<ProductRow>("/api/growth/products", { method: "POST", body: JSON.stringify(body) }),
 
   // generation

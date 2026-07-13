@@ -18,14 +18,15 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from .. import elevate
 from ..auth import get_current_user
 from ..billing import check_quota, record_usage
-from ..database import GrowthListing, Product, Profile, User, get_db
+from ..database import GrowthListing, Product, Profile, Upload, User, get_db
+from ..storage import storage
 
 router = APIRouter(prefix="/api/growth", tags=["growth"])
 
@@ -36,6 +37,11 @@ class ProductCreate(BaseModel):
     style: str | None = None
     target_audience: str | None = None
     notes: str | None = None
+    upload_ids: list[str] = Field(default_factory=list)
+
+
+class IdentifyBody(BaseModel):
+    upload_ids: list[str] = Field(min_length=1)
 
 
 class GenerateBody(BaseModel):
@@ -79,13 +85,55 @@ def _owned_listing(listing_id: str, user: User, db: Session) -> GrowthListing:
     return l
 
 
+# --- uploads + vision identification ------------------------------------------
+
+def _owned_uploads(upload_ids: list[str], user: User, db: Session) -> list[Upload]:
+    rows = (db.query(Upload)
+            .filter(Upload.user_id == user.id, Upload.id.in_(upload_ids)).all())
+    if not rows:
+        raise HTTPException(400, "Upload your product images first.")
+    return rows
+
+
+@router.post("/uploads")
+async def upload_image(file: UploadFile, user: User = Depends(get_current_user),
+                       db: Session = Depends(get_db)):
+    try:
+        upload_id, path = await storage.save_upload(user.id, file)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    db.add(Upload(id=upload_id, user_id=user.id, filename=file.filename or "upload",
+                  content_type=file.content_type or "image/png", path=path))
+    db.commit()
+    return {"upload_id": upload_id, "filename": file.filename}
+
+
+@router.post("/identify")
+def identify(body: IdentifyBody, user: User = Depends(get_current_user),
+             db: Session = Depends(get_db)):
+    """Vision pass over the uploaded images: what IS this product, how to
+    position it, plus a ready SEO title, 13 tags and collection branding."""
+    uploads = _owned_uploads(body.upload_ids, user, db)
+    try:
+        result, usage = elevate.identify_product([u.path for u in uploads])
+    except Exception as exc:
+        raise HTTPException(502, f"Image analysis failed: {exc}")
+    return result.model_dump(mode="json")
+
+
 # --- products ----------------------------------------------------------------
 
 @router.post("/products")
 def create_product(body: ProductCreate, user: User = Depends(get_current_user),
                    db: Session = Depends(get_db)):
+    files = []
+    if body.upload_ids:
+        files = [{"upload_id": u.id, "name": u.filename, "type": u.content_type,
+                  "path": u.path, "size": 0}
+                 for u in _owned_uploads(body.upload_ids, user, db)]
     p = Product(user_id=user.id, name=body.name.strip(), category=body.category,
-                style=body.style, target_audience=body.target_audience, notes=body.notes)
+                style=body.style, target_audience=body.target_audience,
+                notes=body.notes, files=files)
     db.add(p)
     db.commit()
     return _product_dict(p)
