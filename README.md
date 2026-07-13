@@ -1,6 +1,22 @@
-# Etsy Listing AI Studio
+# Etsy Growth AI
 
-**A fully automated AI Etsy listing engine for DIGITAL PRODUCTS.** A creator uploads product files; the platform acts as an Etsy SEO specialist, ecommerce strategist, conversion copywriter, product photographer, graphic designer, brand strategist, market researcher, and customer psychology expert — and hands back a complete, Etsy-ready launch package. No Etsy knowledge, SEO knowledge, copywriting skill, marketing skill, or design skill required from the creator.
+**A fully automated AI Etsy listing engine for DIGITAL PRODUCTS.** Describe your product; the platform acts as an Etsy SEO specialist, ecommerce strategist, conversion copywriter, product photographer, graphic designer, brand strategist, market researcher, and customer psychology expert — and hands back a complete, Etsy-ready launch package. No Etsy knowledge, SEO knowledge, copywriting skill, marketing skill, or design skill required.
+
+## The app
+
+The frontend is a faithful port of the **etsy-elevate-ai** Lovable app (React 19 + Tailwind v4 + shadcn/ui + TanStack Router/Query, warm-paper light / warm-charcoal dark theme), wired to this FastAPI backend instead of Supabase:
+
+- **Landing page → Auth → Growth Dashboard** with a sidebar shell (Dashboard, My Products, Generate Listing, Market Intelligence, Brand Builder, Image Studio, SEO Analyzer, Competitor Analysis, Saved Listings, Settings).
+- **Generate**: name + category + style + audience + notes (+ optional competitor examples and keywords) → one synchronous AI run produces the complete `ListingResult`: product analysis, market research, market-gap analysis, beat-best-sellers plan, brand plan (palette, typography, collection ideas), best title + alternatives, full ready-to-paste description with FAQ, exactly 13 tags, keyword sets, attributes, pricing, a 10-image visual merchandising plan, a 10-dimension 0-100 score set, and priority recommendations.
+- **Listing detail**: Improve bar (Regenerate title / Improve SEO / Improve conversion / More premium / More trendy / Gift-focused / New audience / Re-analyze competitors) + tabs for Listing, Score, Market, Competitors, Brand, Images, Analysis.
+- **Engine** (`backend/app/elevate.py`): one structured Claude call validated against the exact `ListingResult` schema (13 tags ≤20 chars, images numbered 1-10, title ≤140 chars — schema-rejected otherwise, with one automatic repair pass). When `ETSY_API_KEY` is set, the live Etsy market snapshot (real prices/terms/tags for the product's keyword) is injected as ground truth.
+- **API** (`backend/app/routes/growth_routes.py`): products, generate, listings, improve, profile — JWT-authed, quota-metered (free tier 3/month).
+
+The original deep-pipeline engine (Buyer Decision Engine, 10-slot image generation, Etsy OAuth publishing, deterministic scoring) remains in the codebase under `/api/listings` and `pipeline/` — the documentation below describes it.
+
+---
+
+# Legacy engine: Etsy Listing AI Studio
 
 This is not an AI writing tool — it's a system that models how digital-product buyers decide, maps their uncertainty, and builds every listing element (titles, tags, description, pricing, competitor positioning, and all 10 gallery images) to remove specific doubts.
 

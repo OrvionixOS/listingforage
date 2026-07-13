@@ -219,6 +219,45 @@ class Job(Base):
     updated_at = Column(DateTime, default=_now, onupdate=_now)
 
 
+class Product(Base):
+    """A digital product the seller describes on the Generate page."""
+    __tablename__ = "products"
+    id = Column(String, primary_key=True, default=_uuid)
+    user_id = Column(String, ForeignKey("users.id"), index=True, nullable=False)
+    name = Column(String, nullable=False)
+    category = Column(String, nullable=True)
+    style = Column(String, nullable=True)
+    target_audience = Column(Text, nullable=True)
+    notes = Column(Text, nullable=True)
+    files = Column(JSON, default=list)
+    thumbnail_url = Column(String, nullable=True)
+    created_at = Column(DateTime, default=_now)
+
+
+class GrowthListing(Base):
+    """A generated growth listing: the complete ListingResult JSON + score."""
+    __tablename__ = "growth_listings"
+    id = Column(String, primary_key=True, default=_uuid)
+    user_id = Column(String, ForeignKey("users.id"), index=True, nullable=False)
+    product_id = Column(String, ForeignKey("products.id"), index=True, nullable=True)
+    title = Column(String, nullable=False)
+    status = Column(String, default="generated")
+    score = Column(Integer, default=0)
+    saved = Column(Boolean, default=False)
+    result_json = Column(JSON, nullable=False)
+    created_at = Column(DateTime, default=_now)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
+
+
+class Profile(Base):
+    """Account settings: display name + shop/brand name."""
+    __tablename__ = "profiles"
+    user_id = Column(String, ForeignKey("users.id"), primary_key=True)
+    display_name = Column(String, nullable=True)
+    brand_name = Column(String, nullable=True)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
+
+
 class UsageRecord(Base):
     __tablename__ = "usage_records"
     id = Column(String, primary_key=True, default=_uuid)
