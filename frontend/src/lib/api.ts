@@ -121,6 +121,21 @@ export const api = {
       { method: "POST", body: JSON.stringify(body) },
     ),
 
+  // Growth Lab
+  thumbnails: (listingId: string) =>
+    request<import("./types").ThumbnailSimulation>(`/api/growth/listings/${listingId}/thumbnails`, { method: "POST" }),
+  upgrades: (listingId: string) =>
+    request<import("./types").UpgradePlan>(`/api/growth/listings/${listingId}/upgrades`, { method: "POST" }),
+  expansion: (listingId: string) =>
+    request<import("./types").ExpansionPlan>(`/api/growth/listings/${listingId}/expansion`, { method: "POST" }),
+  beatCompetitor: (body: { product_id: string; competitor_url: string }) =>
+    request<{ listing_id: string; teardown: import("./types").CompetitorTeardown }>(
+      "/api/growth/beat-competitor",
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  listingPackage: (listingId: string) =>
+    request<{ package: string }>(`/api/growth/listings/${listingId}/package`),
+
   // listings
   listings: () => request<ListingRow[]>("/api/growth/listings"),
   listing: (id: string) => request<ListingRow>(`/api/growth/listings/${id}`),

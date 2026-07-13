@@ -54,14 +54,14 @@ function Landing() {
       <section className="relative overflow-hidden gradient-hero">
         <div className="mx-auto max-w-4xl px-4 py-24 text-center sm:px-6 sm:py-32">
           <span className="inline-flex items-center gap-2 rounded-full border border-border bg-card/60 px-3 py-1 text-xs font-medium text-muted-foreground">
-            <Sparkles className="h-3.5 w-3.5 text-primary" /> Your AI Etsy business partner
+            <Sparkles className="h-3.5 w-3.5 text-primary" /> AI-powered Etsy Listing Intelligence
           </span>
           <h1 className="mt-6 font-display text-4xl font-bold leading-[1.05] tracking-tight sm:text-6xl">
             Launch Etsy listings that <span className="text-gradient">beat the best sellers</span>.
           </h1>
           <p className="mx-auto mt-6 max-w-2xl text-lg text-muted-foreground">
-            Upload a digital product and get a complete, optimized listing — SEO, competitive positioning, brand
-            strategy and a 10-image conversion plan. No Etsy expertise required.
+            Upload your product. The AI finds the best-selling competitors — then builds your entire
+            Etsy listing to compete: positioning, SEO, pricing, brand and a 10-image conversion plan.
           </p>
           <div className="mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row">
             <Button asChild size="lg" className="gradient-primary text-primary-foreground shadow-glow hover:opacity-90">

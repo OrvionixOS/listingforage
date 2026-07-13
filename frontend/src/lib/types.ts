@@ -67,6 +67,9 @@ export interface ListingResult {
     collectionIdeas: string[];
     expansionIdeas: string[];
     consistencyGuidelines: string[];
+    shopBannerConcept?: string;
+    shopIconConcept?: string;
+    listingStyleGuide?: string[];
   };
   titles: {
     best: string;
@@ -111,6 +114,62 @@ export interface ListingResult {
   images: ListingImage[];
   scores: ScoreSet;
   recommendations: string[];
+  // Growth Lab results (persisted alongside the listing when run)
+  thumbnailSimulation?: ThumbnailSimulation;
+  upgradePlan?: UpgradePlan;
+  expansionPlan?: ExpansionPlan;
+  competitorTeardown?: CompetitorTeardown;
+}
+
+export interface ThumbnailVariation {
+  n: number;
+  concept: string;
+  textPlacement: string;
+  productSize: string;
+  colorContrast: string;
+  visualHierarchy: string;
+  predictedCtr: number;
+  reasoning: string;
+}
+
+export interface ThumbnailSimulation {
+  variations: ThumbnailVariation[];
+  winner: number;
+  winnerRationale: string;
+  competitorComparison: string;
+}
+
+export interface UpgradePlan {
+  currentOffer: string;
+  upgrades: { addition: string; whyItWorks: string; effort: string; valueImpact: string }[];
+  upgradedOffer: string;
+  priceFrom: number;
+  priceTo: number;
+  pricingRationale: string;
+}
+
+export interface ExpansionPlan {
+  collectionName: string;
+  ideas: { name: string; subcategory: string; whyItSells: string; priceRange: string }[];
+  launchOrder: string[];
+  crossSellStrategy: string;
+}
+
+export interface CompetitorTeardown {
+  competitor: {
+    title: string;
+    price: number | null;
+    tags: string[];
+    imageCount: number | null;
+    reviewSignals: string[];
+    strengths: string[];
+    weaknesses: string[];
+  };
+  gaps: string[];
+  positioningPlan: string;
+  upgradedOffer: string;
+  data_source: string;
+  competitor_url?: string;
 }
 
 export interface ProductFile {

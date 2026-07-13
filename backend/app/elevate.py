@@ -115,6 +115,14 @@ class _Brand(BaseModel):
     collectionIdeas: list[str]
     expansionIdeas: list[str]
     consistencyGuidelines: list[str]
+    # Complete shop kit — a cohesive Etsy store, not just one listing
+    shopBannerConcept: str = Field(
+        default="", description="Design direction for the Etsy shop banner: layout, copy, imagery.")
+    shopIconConcept: str = Field(
+        default="", description="Design direction for the shop icon/avatar.")
+    listingStyleGuide: list[str] = Field(
+        default_factory=list,
+        description="4-7 rules every future listing image/copy should follow for a cohesive shop.")
 
 
 class _Titles(BaseModel):
@@ -403,9 +411,17 @@ SYSTEM_PROMPT = (
     "8 brand style (matches the store aesthetic), "
     "9 how it works (download → use → create), "
     "10 final sales (strong conversion-focused close).\n"
+    "- images[].psychology: every image is designed to SELL, not to be pretty. "
+    "Name the specific buyer-psychology trigger it fires — attention, desire, "
+    "trust, objection removal, social proof, or value demonstration — and make "
+    "the scene outcome-focused ('busy entrepreneur using the planner on an iPad, "
+    "visibly organized and in control'), never decorative ('beautiful planner "
+    "mockup'). Across the 10 images cover ALL six triggers at least once.\n"
     "- description.fullText: the complete ready-to-paste Etsy description "
     "assembled from the sections, using line breaks and light emoji where natural.\n"
-    "- brand.colors: 5 palette colors with valid 6-digit hex codes.\n"
+    "- brand.colors: 5 palette colors with valid 6-digit hex codes. Also fill "
+    "shopBannerConcept, shopIconConcept and listingStyleGuide so the seller "
+    "gets a cohesive Etsy store, not one listing.\n"
     "- All scores are integers 0-100. overall reflects true sales potential, "
     "not an average inflation.\n"
     "- titles.best <= 140 characters, keyword-front-loaded, natural, high click-through.\n"
@@ -504,3 +520,308 @@ def improve(product, current_result: dict, action: str,
     )
     return structured_call(SYSTEM_PROMPT, content, ListingResult,
                            max_tokens=20000, temperature=0.8)
+
+
+# ==============================================================================
+# GROWTH LAB — the Etsy product strategist tools
+# ==============================================================================
+
+# --- 1. Thumbnail Optimization Simulator --------------------------------------
+
+class ThumbnailVariation(BaseModel):
+    n: int = Field(ge=1, le=10)
+    concept: str = Field(description="One-line concept for this thumbnail variation.")
+    textPlacement: str
+    productSize: str = Field(description="How much of the frame the product fills and why.")
+    colorContrast: str
+    visualHierarchy: str = Field(description="What the eye hits 1st/2nd/3rd at 180px.")
+    predictedCtr: int = Field(ge=0, le=100, description="Predicted click-through strength 0-100.")
+    reasoning: str = Field(description="Why this variation earns or loses clicks in the search grid.")
+
+
+class ThumbnailSimulation(BaseModel):
+    variations: list[ThumbnailVariation] = Field(min_length=5, max_length=10)
+    winner: int = Field(description="The n of the highest-predicted-CTR variation.")
+    winnerRationale: str
+    competitorComparison: str = Field(
+        description="How the winning thumbnail differs from what competitors in this niche do.")
+
+
+THUMBNAIL_SYSTEM = (
+    "You are Etsy Growth AI's Thumbnail Optimization Simulator. The thumbnail "
+    "is the single biggest click factor on Etsy: a 180px tile competing in a "
+    "40-tile search grid. Design 5-10 DISTINCT thumbnail variations for this "
+    "product and predict each one's click-through strength.\n\n"
+    "Vary deliberately across: text placement (none / top band / bottom band / "
+    "corner badge), product size in frame, color contrast strategy, and visual "
+    "hierarchy. Judge every variation at 180px mobile scale. predictedCtr must "
+    "differentiate honestly (spread the scores; no ties at the top). Pick ONE "
+    "winner and explain why it beats the niche's common thumbnail style. "
+    "If live market data is provided, compare against what competitors "
+    "actually do. Respond with strict JSON only."
+)
+
+
+def thumbnail_simulation(product, current_result: dict) -> tuple[ThumbnailSimulation, dict]:
+    import json
+    titles = (current_result.get("titles") or {})
+    market = _market_block(product.name)
+    text = (
+        "Design thumbnail variations for this Etsy listing.\n\n"
+        + build_product_brief(product)
+        + f"\n\nLISTING TITLE: {titles.get('best', '')}"
+        + f"\nTAGS: {', '.join(current_result.get('tags') or [])}"
+        + (f"\n\n{market}" if market else "")
+    )
+    files = [f for f in (product.files or []) if isinstance(f, dict) and f.get("path")]
+    image_paths = [f["path"] for f in files if f.get("kind") != "asset"]
+    blocks = _image_blocks(image_paths) if image_paths else []
+    content: str | list = (blocks + [{"type": "text", "text": text}]) if blocks else text
+    return structured_call(THUMBNAIL_SYSTEM, content, ThumbnailSimulation,
+                           max_tokens=6000, temperature=0.7)
+
+
+# --- 2. Product Upgrade Generator ----------------------------------------------
+
+class UpgradeItem(BaseModel):
+    addition: str = Field(description="The concrete add-on, e.g. 'matching phone wallpapers'.")
+    whyItWorks: str
+    effort: str = Field(description="low | medium | high — how hard for the seller to produce.")
+    valueImpact: str = Field(description="How it changes perceived value.")
+
+
+class UpgradePlan(BaseModel):
+    currentOffer: str = Field(description="Plain summary of what the product is today.")
+    upgrades: list[UpgradeItem] = Field(min_length=4, max_length=8)
+    upgradedOffer: str = Field(description="The new, stronger bundle described as one offer.")
+    priceFrom: float = Field(gt=0)
+    priceTo: float = Field(gt=0)
+    pricingRationale: str
+
+
+UPGRADE_SYSTEM = (
+    "You are Etsy Growth AI's Product Upgrade Generator. Take the seller's "
+    "current digital product and design upgrades that raise its PERCEIVED "
+    "VALUE and justify a meaningfully higher price (e.g. $5 -> $15).\n\n"
+    "Upgrades must be realistic digital add-ons the same seller could produce "
+    "(matching wallpapers, editable Canva version, bonus templates, journal "
+    "prompts, tracker pages, extra formats). Prefer low-effort/high-perceived-"
+    "value additions first. priceFrom = a fair price for the current offer; "
+    "priceTo = the upgraded bundle price. Respond with strict JSON only."
+)
+
+
+def upgrade_plan(product, current_result: dict) -> tuple[UpgradePlan, dict]:
+    pricing = (current_result.get("pricing") or {})
+    text = (
+        "Design the upgrade plan for this product.\n\n"
+        + build_product_brief(product)
+        + f"\n\nCURRENT RECOMMENDED PRICE: ${pricing.get('recommended', 'unknown')}"
+        + f"\nWHAT'S INCLUDED TODAY: {', '.join((current_result.get('description') or {}).get('included') or []) or 'see product brief'}"
+    )
+    return structured_call(UPGRADE_SYSTEM, text, UpgradePlan,
+                           max_tokens=4000, temperature=0.7)
+
+
+# --- 3. Product Expansion Engine -----------------------------------------------
+
+class ExpansionIdea(BaseModel):
+    name: str
+    subcategory: str = Field(description="Best-fit subcategory from the product taxonomy.")
+    whyItSells: str
+    priceRange: str = Field(description="e.g. '$6-$12'")
+
+
+class ExpansionPlan(BaseModel):
+    collectionName: str = Field(
+        description="The cohesive series brand tying the catalog together.")
+    ideas: list[ExpansionIdea] = Field(min_length=12, max_length=20)
+    launchOrder: list[str] = Field(
+        min_length=3, description="Which 3-5 to launch first and why, as short lines.")
+    crossSellStrategy: str
+
+
+EXPANSION_SYSTEM = (
+    "You are Etsy Growth AI's Product Expansion Engine. From ONE product, "
+    "design the related-product catalog that turns a single listing into a "
+    "revenue-generating shop (e.g. moon phase digital paper -> astrology "
+    "journal, tarot card backgrounds, lunar planner, zodiac stickers, crystal "
+    "worksheets, manifestation workbook).\n\n"
+    "Every idea must share the same buyer and aesthetic so the shop cross-"
+    "sells naturally. Name a cohesive collection brand and give each idea a "
+    "realistic Etsy price range. Respond with strict JSON only."
+)
+
+
+def expansion_plan(product, current_result: dict) -> tuple[ExpansionPlan, dict]:
+    brand = (current_result.get("brand") or {})
+    text = (
+        "Design the product expansion catalog.\n\n"
+        + build_product_brief(product)
+        + f"\n\nBRAND POSITIONING: {brand.get('positioningStatement', '')}"
+        + f"\nIDEAL CUSTOMER: {brand.get('idealCustomer', '')}"
+    )
+    return structured_call(EXPANSION_SYSTEM, text, ExpansionPlan,
+                           max_tokens=6000, temperature=0.8)
+
+
+# --- 4. Beat-the-Best-Seller mode ----------------------------------------------
+
+class CompetitorProfile(BaseModel):
+    title: str
+    price: float | None = None
+    tags: list[str] = Field(default_factory=list)
+    imageCount: int | None = None
+    reviewSignals: list[str] = Field(
+        default_factory=list,
+        description="What buyers praise and complain about in the reviews.")
+    strengths: list[str] = Field(min_length=2)
+    weaknesses: list[str] = Field(min_length=2)
+
+
+class CompetitorTeardown(BaseModel):
+    competitor: CompetitorProfile
+    gaps: list[str] = Field(min_length=3, description="Openings the competitor leaves.")
+    positioningPlan: str = Field(
+        description="How the seller's product wins: positioning, offer, imagery, keywords.")
+    upgradedOffer: str = Field(
+        description="The concrete stronger offer, e.g. '150-page planner + stickers + trackers + editable Canva version'.")
+    data_source: str = "model_knowledge"   # set by the engine, never the model
+
+
+TEARDOWN_SYSTEM = (
+    "You are Etsy Growth AI's Beat-the-Best-Seller engine. You are given a "
+    "competitor Etsy listing and the seller's own product. Tear the competitor "
+    "down honestly — real strengths, real weaknesses, what its reviews signal "
+    "— then design the plan that BEATS it: sharper positioning, a stronger "
+    "offer, better imagery, better keywords.\n\n"
+    "IF MEASURED COMPETITOR DATA is provided (fetched live from Etsy), it is "
+    "ground truth — quote its actual title/price/tags/reviews. If not, reason "
+    "from the URL/description given and never invent measured numbers. "
+    "Respond with strict JSON only."
+)
+
+
+def _parse_etsy_listing_id(url: str) -> str | None:
+    import re
+    m = re.search(r"etsy\.com/(?:[a-z]{2}(?:-[a-zA-Z]{2})?/)?listing/(\d+)", url)
+    return m.group(1) if m else None
+
+
+def fetch_competitor_facts(url: str) -> tuple[str, str]:
+    """Live competitor fetch → (facts_text, data_source). Degrades honestly."""
+    from .etsy.client import EtsyClient
+    listing_id = _parse_etsy_listing_id(url)
+    if not listing_id:
+        return f"COMPETITOR URL (could not parse a listing id): {url}", "model_knowledge"
+    client = EtsyClient()
+    if not client.api_key:
+        return (f"COMPETITOR LISTING URL: {url} (no ETSY_API_KEY configured — "
+                "no live data available)"), "model_knowledge"
+    try:
+        row = client.get_listing_public(listing_id)
+    except Exception as exc:
+        return f"COMPETITOR LISTING URL: {url} (live fetch failed: {exc})", "model_knowledge"
+    price = row.get("price") or {}
+    try:
+        price_str = f"${int(price.get('amount', 0)) / int(price.get('divisor', 100)):.2f}"
+    except (TypeError, ValueError, ZeroDivisionError):
+        price_str = "unknown"
+    reviews_txt = ""
+    try:
+        reviews = client.get_listing_reviews_public(listing_id, limit=20)
+        snippets = [f"[{r.get('rating', '?')}/5] {str(r.get('review', ''))[:200]}"
+                    for r in reviews if r.get("review")][:12]
+        if snippets:
+            reviews_txt = "\nRECENT REVIEWS:\n" + "\n".join(snippets)
+    except Exception:
+        pass
+    facts = (
+        "MEASURED COMPETITOR DATA (fetched live from Etsy right now — ground truth):\n"
+        f"TITLE: {row.get('title', '')}\n"
+        f"PRICE: {price_str}\n"
+        f"TAGS: {', '.join(row.get('tags') or [])}\n"
+        f"IMAGE COUNT: {len(row.get('images') or []) or row.get('num_images', 'unknown')}\n"
+        f"FAVORITES: {row.get('num_favorers', 'unknown')} | VIEWS: {row.get('views', 'unknown')}\n"
+        f"DESCRIPTION (first 1500 chars):\n{str(row.get('description', ''))[:1500]}"
+        + reviews_txt
+    )
+    return facts, "live_etsy_data"
+
+
+def beat_competitor(product, competitor_url: str) -> tuple[CompetitorTeardown, ListingResult, dict]:
+    """Teardown the competitor, then rebuild the seller's ENTIRE listing to
+    outperform it. Returns (teardown, rebuilt ListingResult, usage)."""
+    facts, source = fetch_competitor_facts(competitor_url)
+
+    teardown, u1 = structured_call(
+        TEARDOWN_SYSTEM,
+        "Tear down this competitor and design the winning plan.\n\n"
+        f"{facts}\n\nSELLER'S PRODUCT:\n{build_product_brief(product)}",
+        CompetitorTeardown, max_tokens=4000, temperature=0.6)
+    teardown.data_source = source  # engine-enforced provenance
+
+    directive = (
+        "BEAT THIS SPECIFIC COMPETITOR. Rebuild the entire listing to "
+        "outperform it using the teardown below: position against its "
+        "weaknesses, exceed its offer (upgradedOffer), out-keyword it, and "
+        "out-image it. Do not copy its title or copy — beat them.\n\n"
+        f"COMPETITOR TEARDOWN:\n{teardown.model_dump_json(indent=1)}\n\n{facts}"
+    )
+    result, u2 = generate(product, competitors=directive)
+    usage = {"tokens_in": u1["tokens_in"] + u2["tokens_in"],
+             "tokens_out": u1["tokens_out"] + u2["tokens_out"]}
+    return teardown, result, usage
+
+
+# --- 5. One-click Etsy listing package ------------------------------------------
+
+def build_package(product, result: dict) -> str:
+    """Assemble the ready-to-upload package as paste-friendly markdown."""
+    r = result
+    pa = r.get("productAnalysis") or {}
+    d = r.get("description") or {}
+    pricing = r.get("pricing") or {}
+    beat = r.get("beatBestSellers") or {}
+    gap = r.get("marketGap") or {}
+    lines = [
+        "ETSY LISTING PACKAGE — ready to upload",
+        "=" * 50,
+        "",
+        "TITLE",
+        (r.get("titles") or {}).get("best", ""),
+        "",
+        "DESCRIPTION (paste as-is)",
+        d.get("fullText", ""),
+        "",
+        "13 TAGS (paste into the tag fields)",
+        ", ".join(r.get("tags") or []),
+        "",
+        "CATEGORY",
+        product.category or "—",
+        "",
+        "PRICING",
+        f"${pricing.get('recommended', '—')} (range ${pricing.get('min', '—')}-${pricing.get('max', '—')})",
+        pricing.get("strategy", ""),
+        "",
+        "CUSTOMER AVATAR",
+        f"Ideal buyer: {pa.get('idealBuyer', '—')}",
+        f"Buying motivation: {pa.get('buyingMotivation', '—')}",
+        f"Emotional appeal: {pa.get('emotionalAppeal', '—')}",
+        "",
+        "PRODUCT POSITIONING",
+        beat.get("positioning", "") or gap.get("strongerOffer", ""),
+        f"Why buyers choose this: {beat.get('whyChooseThis', '—')}",
+        "",
+        "FILE DELIVERY INSTRUCTIONS",
+        f"Files: {d.get('fileDetails', '—')}",
+        f"Instructions: {d.get('instructions', '—')}",
+        f"Compatibility: {d.get('compatibility', '—')}",
+        "",
+        "10 LISTING IMAGES (build to this plan)",
+    ]
+    for img in r.get("images") or []:
+        lines.append(f"{img.get('n')}. {img.get('title')} — {img.get('purpose')}")
+        lines.append(f"   Psychology: {img.get('psychology')} | Overlay: {img.get('copyOverlay')}")
+        lines.append(f"   Layout: {img.get('layout')} | Mockup: {img.get('mockup')}")
+    return "\n".join(lines)

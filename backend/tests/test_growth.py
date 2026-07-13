@@ -451,6 +451,184 @@ def test_real_identify_builds_blocks(tmp_path=None):
     print("PASS identify_product: real pixels become vision blocks, empty input rejected")
 
 
+# ------------------------------------------------------------------------------
+# Growth Lab
+# ------------------------------------------------------------------------------
+
+def make_thumb_sim() -> dict:
+    return {
+        "variations": [
+            {"n": i, "concept": f"Concept {i}", "textPlacement": "bottom band",
+             "productSize": "fills 80% of frame", "colorContrast": "warm on dark",
+             "visualHierarchy": "product → badge → text",
+             "predictedCtr": 60 + i * 4, "reasoning": "strong at 180px"}
+            for i in range(1, 6)
+        ],
+        "winner": 5, "winnerRationale": "Highest contrast and clearest hierarchy.",
+        "competitorComparison": "Competitors use flat beige mockups; this pops in the grid.",
+    }
+
+
+def make_upgrade_plan() -> dict:
+    return {
+        "currentOffer": "50 printable affirmation cards.",
+        "upgrades": [
+            {"addition": "Matching phone wallpapers", "whyItWorks": "Daily visibility",
+             "effort": "low", "valueImpact": "Feels like a lifestyle system"},
+            {"addition": "Journal prompts", "whyItWorks": "Deepens use", "effort": "low",
+             "valueImpact": "Adds a second use case"},
+            {"addition": "Printable altar cards", "whyItWorks": "Niche ritual value",
+             "effort": "medium", "valueImpact": "Premium feel"},
+            {"addition": "Canva editable version", "whyItWorks": "Personalization",
+             "effort": "medium", "valueImpact": "Justifies premium price"},
+        ],
+        "upgradedOffer": "The complete affirmation ritual kit.",
+        "priceFrom": 5.0, "priceTo": 15.0,
+        "pricingRationale": "Bundle perception triples perceived value.",
+    }
+
+
+def make_expansion_plan() -> dict:
+    return {
+        "collectionName": "Lunar Ritual Collection",
+        "ideas": [{"name": f"Product {i}", "subcategory": "Wellness & Spirituality / Manifestation journals",
+                   "whyItSells": "Same buyer, same aesthetic", "priceRange": "$6-$12"}
+                  for i in range(1, 13)],
+        "launchOrder": ["Astrology journal first — highest search volume",
+                        "Lunar planner second", "Zodiac stickers third"],
+        "crossSellStrategy": "Every listing links the collection; bundle discount on 3+.",
+    }
+
+
+def make_teardown() -> dict:
+    return {
+        "competitor": {
+            "title": "100 Page Digital Planner", "price": 9.99,
+            "tags": ["digital planner", "goodnotes planner"], "imageCount": 7,
+            "reviewSignals": ["praise: easy to use", "complaint: no editing tutorial"],
+            "strengths": ["Clean covers", "Strong review count"],
+            "weaknesses": ["No video tutorial", "Only 100 pages, no extras"],
+        },
+        "gaps": ["No editable Canva version", "No stickers included", "Weak lifestyle imagery"],
+        "positioningPlan": "Position as the complete planning system, not just a planner.",
+        "upgradedOffer": "150-page planner + stickers + trackers + editable Canva version.",
+        "data_source": "model_knowledge",
+    }
+
+
+def test_growth_lab_tools_persist():
+    """Thumbnails/upgrades/expansion run per-listing and persist into result_json."""
+    client, headers = fresh_client()
+    result = elevate.ListingResult.model_validate(make_result())
+    p = client.post("/api/growth/products", headers=headers, json={"name": "Cards"})
+    with patch.object(elevate, "generate", lambda *a, **k: (result, {"tokens_in": 1, "tokens_out": 1})):
+        g = client.post("/api/growth/generate", headers=headers,
+                        json={"product_id": p.json()["id"]})
+    lid = g.json()["listing_id"]
+
+    sim = elevate.ThumbnailSimulation.model_validate(make_thumb_sim())
+    up = elevate.UpgradePlan.model_validate(make_upgrade_plan())
+    ex = elevate.ExpansionPlan.model_validate(make_expansion_plan())
+    with patch.object(elevate, "thumbnail_simulation", lambda *a, **k: (sim, {"tokens_in": 1, "tokens_out": 1})), \
+         patch.object(elevate, "upgrade_plan", lambda *a, **k: (up, {"tokens_in": 1, "tokens_out": 1})), \
+         patch.object(elevate, "expansion_plan", lambda *a, **k: (ex, {"tokens_in": 1, "tokens_out": 1})):
+        t = client.post(f"/api/growth/listings/{lid}/thumbnails", headers=headers)
+        u = client.post(f"/api/growth/listings/{lid}/upgrades", headers=headers)
+        e = client.post(f"/api/growth/listings/{lid}/expansion", headers=headers)
+    assert t.json()["winner"] == 5
+    assert u.json()["priceTo"] == 15.0
+    assert len(e.json()["ideas"]) == 12
+
+    # persisted alongside the ListingResult and returned on later reads
+    got = client.get(f"/api/growth/listings/{lid}", headers=headers).json()["result"]
+    assert got["thumbnailSimulation"]["winner"] == 5
+    assert got["upgradePlan"]["upgradedOffer"].startswith("The complete")
+    assert got["expansionPlan"]["collectionName"] == "Lunar Ritual Collection"
+    assert got["titles"]["best"], "original ListingResult must survive the merge"
+    print("PASS Growth Lab persistence: thumbnails/upgrades/expansion stored with the listing")
+
+
+def test_beat_competitor_flow():
+    """URL parse → live facts (faked transport) → teardown + rebuilt listing,
+    provenance engine-enforced."""
+    assert elevate._parse_etsy_listing_id("https://www.etsy.com/listing/123456789/foo-bar") == "123456789"
+    assert elevate._parse_etsy_listing_id("https://www.etsy.com/uk/listing/42/x?ref=1") == "42"
+    assert elevate._parse_etsy_listing_id("https://example.com/nope") is None
+
+    client, headers = fresh_client()
+    p = client.post("/api/growth/products", headers=headers, json={"name": "My Planner"})
+
+    teardown = elevate.CompetitorTeardown.model_validate(make_teardown())
+    rebuilt = elevate.ListingResult.model_validate(
+        make_result(overall=93, best_title="Complete 150 Page Digital Planner System, Stickers + Trackers + Canva"))
+
+    def fake_beat(product, url):
+        assert "etsy.com/listing/555" in url
+        td = teardown.model_copy(deep=True)
+        td.data_source = "live_etsy_data"
+        return td, rebuilt, {"tokens_in": 2, "tokens_out": 2}
+
+    with patch.object(elevate, "beat_competitor", fake_beat):
+        r = client.post("/api/growth/beat-competitor", headers=headers,
+                        json={"product_id": p.json()["id"],
+                              "competitor_url": "https://www.etsy.com/listing/555/planner"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["teardown"]["data_source"] == "live_etsy_data"
+    assert body["teardown"]["competitor_url"].endswith("/555/planner")
+
+    got = client.get(f"/api/growth/listings/{body['listing_id']}", headers=headers).json()
+    assert got["score"] == 93
+    assert got["result"]["competitorTeardown"]["competitor"]["title"] == "100 Page Digital Planner"
+    print("PASS beat-competitor: URL parsing, new listing created with teardown attached")
+
+
+def test_fetch_competitor_facts_live_and_fallback():
+    """Live competitor fetch through a fake Etsy transport + honest fallbacks."""
+
+    class FakeT:
+        def request(self, method, url, **kw):
+            if url.endswith("/reviews"):
+                return {"results": [{"rating": 4, "review": "Love it but no tutorial included."}]}
+            return {"title": "Boho Planner", "description": "A planner.",
+                    "price": {"amount": 999, "divisor": 100},
+                    "tags": ["planner"], "num_favorers": 200, "views": 5000,
+                    "images": [{}] * 8}
+
+    with patch("app.etsy.client.EtsyClient.__init__",
+               lambda self, api_key=None, transport=None: (
+                   setattr(self, "api_key", "k") or setattr(self, "transport", FakeT()) or
+                   setattr(self, "redirect_uri", "x"))):
+        facts, source = elevate.fetch_competitor_facts("https://www.etsy.com/listing/777/x")
+    assert source == "live_etsy_data"
+    assert "Boho Planner" in facts and "$9.99" in facts and "no tutorial" in facts
+    assert "IMAGE COUNT: 8" in facts
+
+    facts2, source2 = elevate.fetch_competitor_facts("https://not-etsy.com/x")
+    assert source2 == "model_knowledge" and "could not parse" in facts2
+    print("PASS competitor facts: live fetch measured, non-Etsy URL degrades honestly")
+
+
+def test_listing_package():
+    client, headers = fresh_client()
+    result = elevate.ListingResult.model_validate(make_result())
+    p = client.post("/api/growth/products", headers=headers,
+                    json={"name": "Pack", "category": "Paper & Party Supplies / Invitations"})
+    with patch.object(elevate, "generate", lambda *a, **k: (result, {"tokens_in": 1, "tokens_out": 1})):
+        g = client.post("/api/growth/generate", headers=headers,
+                        json={"product_id": p.json()["id"]})
+    r = client.get(f"/api/growth/listings/{g.json()['listing_id']}/package", headers=headers)
+    pkg = r.json()["package"]
+    for section in ["ETSY LISTING PACKAGE", "TITLE", "DESCRIPTION", "13 TAGS",
+                    "CATEGORY", "PRICING", "CUSTOMER AVATAR", "PRODUCT POSITIONING",
+                    "FILE DELIVERY INSTRUCTIONS", "10 LISTING IMAGES"]:
+        assert section in pkg, section
+    assert "Paper & Party Supplies / Invitations" in pkg
+    assert "boho wedding invite" in pkg  # tags made it in
+    assert pkg.count("Psychology:") == 10
+    print("PASS one-click package: all 9 sections present, 10 image briefs included")
+
+
 if __name__ == "__main__":
     test_result_schema_hard_rules()
     test_full_api_flow()
@@ -460,4 +638,8 @@ if __name__ == "__main__":
     test_upload_identify_and_grounded_generation()
     test_minimal_intake_asset_analysis_and_autoname()
     test_real_identify_builds_blocks()
+    test_growth_lab_tools_persist()
+    test_beat_competitor_flow()
+    test_fetch_competitor_facts_live_and_fallback()
+    test_listing_package()
     print("\nALL GROWTH TESTS PASSED")

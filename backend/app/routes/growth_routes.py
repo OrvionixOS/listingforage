@@ -61,6 +61,11 @@ class ImproveBody(BaseModel):
     instruction: str = ""
 
 
+class BeatCompetitorBody(BaseModel):
+    product_id: str
+    competitor_url: str = Field(min_length=8)
+
+
 class ProfileBody(BaseModel):
     display_name: str | None = None
     brand_name: str | None = None
@@ -214,6 +219,106 @@ def improve(listing_id: str, body: ImproveBody,
     db.commit()
     record_usage(db, user, listing.id, usage)
     return {"listing_id": listing.id, "result": listing.result_json}
+
+
+# --- Growth Lab: thumbnails, upgrades, expansion, beat-competitor, package -----
+
+def _product_for(listing: GrowthListing, db: Session):
+    product = db.get(Product, listing.product_id) if listing.product_id else None
+    if product is None:
+        product = SimpleNamespace(name=listing.title, category=None, style=None,
+                                  target_audience=None, notes=None, files=[],
+                                  brand_name=None, color_preferences=None, file_link=None)
+    return product
+
+
+def _merge_result(db: Session, listing: GrowthListing, key: str, value: dict) -> None:
+    """Persist a Growth Lab result alongside the ListingResult (JSON column
+    needs reassignment, not mutation, to be detected)."""
+    merged = dict(listing.result_json or {})
+    merged[key] = value
+    listing.result_json = merged
+    db.commit()
+
+
+@router.post("/listings/{listing_id}/thumbnails")
+def thumbnails(listing_id: str, user: User = Depends(get_current_user),
+               db: Session = Depends(get_db)):
+    listing = _owned_listing(listing_id, user, db)
+    try:
+        sim, usage = elevate.thumbnail_simulation(_product_for(listing, db), listing.result_json)
+    except Exception as exc:
+        raise HTTPException(502, f"Thumbnail simulation failed: {exc}")
+    data = sim.model_dump(mode="json")
+    _merge_result(db, listing, "thumbnailSimulation", data)
+    record_usage(db, user, listing.id, usage)
+    return data
+
+
+@router.post("/listings/{listing_id}/upgrades")
+def upgrades(listing_id: str, user: User = Depends(get_current_user),
+             db: Session = Depends(get_db)):
+    listing = _owned_listing(listing_id, user, db)
+    try:
+        plan, usage = elevate.upgrade_plan(_product_for(listing, db), listing.result_json)
+    except Exception as exc:
+        raise HTTPException(502, f"Upgrade generation failed: {exc}")
+    data = plan.model_dump(mode="json")
+    _merge_result(db, listing, "upgradePlan", data)
+    record_usage(db, user, listing.id, usage)
+    return data
+
+
+@router.post("/listings/{listing_id}/expansion")
+def expansion(listing_id: str, user: User = Depends(get_current_user),
+              db: Session = Depends(get_db)):
+    listing = _owned_listing(listing_id, user, db)
+    try:
+        plan, usage = elevate.expansion_plan(_product_for(listing, db), listing.result_json)
+    except Exception as exc:
+        raise HTTPException(502, f"Expansion planning failed: {exc}")
+    data = plan.model_dump(mode="json")
+    _merge_result(db, listing, "expansionPlan", data)
+    record_usage(db, user, listing.id, usage)
+    return data
+
+
+@router.post("/beat-competitor")
+def beat_competitor(body: BeatCompetitorBody, user: User = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
+    """Paste a competitor Etsy listing URL → live teardown → the seller's
+    entire listing rebuilt to outperform it. Creates a NEW listing."""
+    product = db.get(Product, body.product_id)
+    if product is None or product.user_id != user.id:
+        raise HTTPException(404, "Product not found.")
+    ok, quota = check_quota(db, user)
+    if not ok:
+        raise HTTPException(402, f"Monthly listing quota reached ({quota['used']}/{quota['limit']}). Upgrade to continue.")
+    try:
+        teardown, result, usage = elevate.beat_competitor(product, body.competitor_url)
+    except Exception as exc:
+        raise HTTPException(502, f"Beat-competitor run failed: {exc}")
+
+    merged = result.model_dump(mode="json")
+    merged["competitorTeardown"] = teardown.model_dump(mode="json")
+    merged["competitorTeardown"]["competitor_url"] = body.competitor_url
+    listing = GrowthListing(
+        user_id=user.id, product_id=product.id,
+        title=result.titles.best[:200] or product.name,
+        status="generated", score=result.scores.overall, result_json=merged)
+    db.add(listing)
+    db.commit()
+    record_usage(db, user, listing.id, usage)
+    return {"listing_id": listing.id, "teardown": merged["competitorTeardown"],
+            "result": merged}
+
+
+@router.get("/listings/{listing_id}/package")
+def listing_package(listing_id: str, user: User = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
+    """One-click Etsy listing package: everything ready to upload, as text."""
+    listing = _owned_listing(listing_id, user, db)
+    return {"package": elevate.build_package(_product_for(listing, db), listing.result_json)}
 
 
 # --- listings -----------------------------------------------------------------
