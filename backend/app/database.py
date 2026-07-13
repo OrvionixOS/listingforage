@@ -282,8 +282,11 @@ def _auto_add_missing_columns() -> None:
     ALTER the table to add them. Only nullable/defaulted additions happen
     here, which is exactly what additive model changes look like — anything
     heavier belongs in a real migration."""
+    import logging
+
     from sqlalchemy import inspect, text
 
+    log = logging.getLogger("listingforge.migrate")
     inspector = inspect(engine)
     existing_tables = set(inspector.get_table_names())
     with engine.begin() as conn:
@@ -295,8 +298,14 @@ def _auto_add_missing_columns() -> None:
                 if column.name in existing_cols:
                     continue
                 col_type = column.type.compile(engine.dialect)
-                conn.execute(text(
-                    f'ALTER TABLE {table.name} ADD COLUMN "{column.name}" {col_type}'))
+                try:
+                    conn.execute(text(
+                        f'ALTER TABLE {table.name} ADD COLUMN "{column.name}" {col_type}'))
+                    log.warning("startup migration: added column %s.%s (%s)",
+                                table.name, column.name, col_type)
+                except Exception:
+                    log.exception("startup migration: could not add %s.%s",
+                                  table.name, column.name)
 
 
 def init_db() -> None:
