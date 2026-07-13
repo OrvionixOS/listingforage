@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
 from .database import init_db
-from .routes import (auth_routes, billing_routes, etsy_routes,
+from .routes import (auth_routes, billing_routes, etsy_routes, growth_routes,
                      listing_routes, workspace_routes)
 
 logging.basicConfig(level=logging.INFO)
@@ -25,6 +25,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_routes.router)
+app.include_router(growth_routes.router)
 app.include_router(listing_routes.router)
 app.include_router(billing_routes.router)
 app.include_router(etsy_routes.router)
@@ -51,10 +52,24 @@ def health():
 
 # --- Serve the built frontend (single-service deploy) -----------------------
 # Build with `npm run build` in /frontend; dist is mounted here if present.
+# SPA fallback: unknown non-API paths (client-side routes like /dashboard)
+# serve index.html so deep links and refreshes work.
 from pathlib import Path
 
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+
+class SpaStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code == 404 and not path.startswith("api"):
+                return await super().get_response("index.html", scope)
+            raise
+
 
 _dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 if _dist.exists():
-    app.mount("/", StaticFiles(directory=str(_dist), html=True), name="frontend")
+    app.mount("/", SpaStaticFiles(directory=str(_dist), html=True), name="frontend")
