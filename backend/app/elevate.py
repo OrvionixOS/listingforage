@@ -223,14 +223,89 @@ class ListingResult(BaseModel):
         return v
 
 
-# --- vision product identification -------------------------------------------
+# --- product taxonomy (mirrors frontend/src/lib/categories.ts) ---------------
 
-PRODUCT_CATEGORIES = [
-    "Printable Artwork", "Digital Planner", "Template", "Invitation",
-    "SVG File", "Cricut File", "Font", "Branding Kit", "Social Media Template",
-    "Business Template", "Wedding Product", "Educational Product",
-    "Digital Download", "Pattern", "Worksheet", "Mockup", "Design Bundle",
-]
+CATEGORY_GROUPS: dict[str, list[str]] = {
+    "Art & Collectibles": ["Digital wall art", "Printable art", "Digital illustrations",
+                           "Digital paintings", "Photography prints"],
+    "Craft Supplies & Tools": ["Digital papers", "Scrapbook papers", "SVG files",
+                               "Cricut files", "Sewing patterns", "Embroidery patterns",
+                               "Laser cut files", "Craft templates"],
+    "Paper & Party Supplies": ["Invitations", "Party printables", "Wedding templates",
+                               "Cards", "Labels", "Signs", "Printable decorations"],
+    "Templates & Design Resources": ["Canva templates", "Resume templates",
+                                     "Social media templates", "Business templates",
+                                     "Branding kits", "Presentation templates"],
+    "Planners & Organization": ["Digital planners", "Printable planners", "Calendars",
+                                "Trackers", "Checklists", "Notion templates"],
+    "Journals, Books & Educational": ["Ebooks", "Workbooks", "Guided journals",
+                                      "Coloring books", "Worksheets", "Learning resources"],
+    "Graphics & Digital Assets": ["Clip art", "Digital stickers", "Backgrounds",
+                                  "Textures", "Patterns", "Fonts", "Brushes", "Icons"],
+    "Photography & Creative Tools": ["Lightroom presets", "Photoshop actions",
+                                     "Photo overlays", "Mockups", "Editing resources"],
+    "Business & Professional Resources": ["Client forms", "Contracts", "Spreadsheets",
+                                          "Calculators", "SOP templates", "Marketing materials"],
+    "AI & Digital Tools": ["AI prompt packs", "AI workflow templates", "ChatGPT resources",
+                           "Midjourney resources", "Automation templates"],
+    "Wellness & Spirituality": ["Manifestation journals", "Tarot resources",
+                                "Astrology resources", "Meditation guides",
+                                "Affirmation cards", "Spiritual workbooks"],
+    "3D & Technical Files": ["3D models", "STL files", "CAD files",
+                             "Digital manufacturing files"],
+    "Audio & Video Assets": ["Music files", "Sound effects", "Video templates",
+                             "Motion graphics", "LUTs"],
+}
+
+PRODUCT_CATEGORIES = [f"{group} / {sub}"
+                      for group, subs in CATEGORY_GROUPS.items() for sub in subs]
+
+
+# --- product-file analysis (PDF / ZIP / SVG / link) ---------------------------
+
+MAX_PDF_BYTES = 10 * 1024 * 1024
+
+
+def _asset_context(files: list[dict]) -> tuple[list[dict], str]:
+    """Optional product files → (extra content blocks, inventory text).
+    PDFs are attached as readable documents; ZIPs are inventoried (file count,
+    types, sample names); SVGs are noted — so the AI knows exactly what's
+    included, how many pages/files, and the intended use."""
+    blocks: list[dict] = []
+    notes: list[str] = []
+    for f in files:
+        path = Path(f.get("path", ""))
+        if not path.exists():
+            continue
+        suffix = path.suffix.lower()
+        name = f.get("name") or path.name
+        if suffix == ".pdf":
+            if path.stat().st_size <= MAX_PDF_BYTES:
+                blocks.append({
+                    "type": "document",
+                    "source": {"type": "base64", "media_type": "application/pdf",
+                               "data": base64.b64encode(path.read_bytes()).decode()},
+                })
+                notes.append(f"- {name}: PDF attached in full — read it to know exact contents and page count.")
+            else:
+                notes.append(f"- {name}: PDF ({path.stat().st_size // 1024} KB, too large to attach).")
+        elif suffix == ".zip":
+            try:
+                import zipfile
+                from collections import Counter
+                with zipfile.ZipFile(path) as z:
+                    entries = [i for i in z.infolist() if not i.is_dir()]
+                ext_counts = Counter((Path(i.filename).suffix.lower() or "no-ext") for i in entries)
+                sample = ", ".join(i.filename for i in entries[:12])
+                counts = ", ".join(f"{n}x {ext}" for ext, n in ext_counts.most_common())
+                notes.append(f"- {name}: ZIP containing {len(entries)} files ({counts}). Sample: {sample}")
+            except Exception:
+                notes.append(f"- {name}: ZIP (could not be read).")
+        elif suffix == ".svg":
+            notes.append(f"- {name}: SVG vector file ({path.stat().st_size // 1024} KB).")
+    inventory = ("PRODUCT FILE CONTENTS (measured from the actual uploaded product "
+                 "files — this is ground truth for what's included):\n" + "\n".join(notes)) if notes else ""
+    return blocks, inventory
 
 
 class ProductIdentification(BaseModel):
@@ -317,10 +392,17 @@ SYSTEM_PROMPT = (
     "signals and social proof. Always respond with strict JSON only.\n\n"
     "RULES:\n"
     "- tags: EXACTLY 13 Etsy tags, each <= 20 characters, lowercase, buyer-search phrases.\n"
-    "- images: EXACTLY 10 items following the Etsy image sequence: 1 hero, "
-    "2 overview, 3 what's included, 4 lifestyle mockup, 5 alternative use case, "
-    "6 product details, 7 feature highlights, 8 size/format guide, 9 how it "
-    "works, 10 brand + CTA.\n"
+    "- images: EXACTLY 10 items following the Etsy listing image set: "
+    "1 hero (main Etsy thumbnail, product-focused, high click potential), "
+    "2 product showcase (shows everything included), "
+    "3 feature breakdown (highlights benefits and contents), "
+    "4 close-up detail (shows quality and details), "
+    "5 lifestyle mockup (shows the product being used), "
+    "6 size/file information (explains exactly what the buyer receives), "
+    "7 comparison (shows value and bundle contents), "
+    "8 brand style (matches the store aesthetic), "
+    "9 how it works (download → use → create), "
+    "10 final sales (strong conversion-focused close).\n"
     "- description.fullText: the complete ready-to-paste Etsy description "
     "assembled from the sections, using line breaks and light emoji where natural.\n"
     "- brand.colors: 5 palette colors with valid 6-digit hex codes.\n"
@@ -350,14 +432,23 @@ def build_product_brief(p) -> str:
     files = p.files if isinstance(p.files, list) else []
     file_list = ", ".join(f"{f.get('name', '?')} ({f.get('type', '?')})" for f in files) or "not specified"
     style = p.style if p.style and p.style != "Auto-detect" else "let AI detect"
-    return (
-        f"PRODUCT NAME: {p.name}\n"
-        f"CATEGORY: {p.category or 'let AI detect'}\n"
-        f"PREFERRED STYLE: {style}\n"
-        f"TARGET AUDIENCE: {p.target_audience or 'let AI infer the best-converting audience'}\n"
-        f"SELLER NOTES / EXTRA INPUT: {p.notes or 'none'}\n"
-        f"UPLOADED FILES: {file_list}"
-    )
+    name = p.name if p.name and p.name != "Untitled product" \
+        else "not provided — infer the best product name from the images/files"
+    lines = [
+        f"PRODUCT NAME: {name}",
+        f"CATEGORY: {p.category or 'let AI detect'}",
+        f"PREFERRED STYLE: {style}",
+        f"TARGET AUDIENCE: {p.target_audience or 'let AI infer the best-converting audience'}",
+        f"SELLER NOTES / EXTRA INPUT: {p.notes or 'none'}",
+        f"UPLOADED FILES: {file_list}",
+    ]
+    if getattr(p, "brand_name", None):
+        lines.append(f"BRAND NAME: {p.brand_name} — weave it into the brand plan and image set.")
+    if getattr(p, "color_preferences", None):
+        lines.append(f"BRAND COLOR PREFERENCES: {p.color_preferences}")
+    if getattr(p, "file_link", None):
+        lines.append(f"PRODUCT FILE LINK (e.g. Canva): {p.file_link}")
+    return "\n".join(lines)
 
 
 def _market_block(keyword: str) -> str:
@@ -378,14 +469,19 @@ def generate(product, competitors: str = "", keywords: str = "") -> tuple[Listin
         + (f"\n\n{extra}" if extra else "")
         + (f"\n\n{market}" if market else "")
     )
-    # ground the whole listing in the real product images when we have them
-    paths = [f.get("path") for f in (product.files or [])
-             if isinstance(f, dict) and f.get("path")]
-    blocks = _image_blocks(paths) if paths else []
-    if blocks:
-        text = ("The attached images ARE the product — ground every claim in "
-                "what they actually show.\n\n" + text)
-        content: str | list = blocks + [{"type": "text", "text": text}]
+    # ground the whole listing in the real product images + product files
+    files = [f for f in (product.files or []) if isinstance(f, dict) and f.get("path")]
+    image_paths = [f["path"] for f in files if f.get("kind") != "asset"]
+    asset_files = [f for f in files if f.get("kind") == "asset"]
+    blocks = _image_blocks(image_paths) if image_paths else []
+    asset_blocks, inventory = _asset_context(asset_files)
+    if inventory:
+        text += "\n\n" + inventory
+    if blocks or asset_blocks:
+        text = ("The attached images and files ARE the product — ground every "
+                "claim (what's included, page/file counts, style, intended use) "
+                "in what they actually contain.\n\n" + text)
+        content: str | list = blocks + asset_blocks + [{"type": "text", "text": text}]
     else:
         content = text
     return structured_call(SYSTEM_PROMPT, content, ListingResult,

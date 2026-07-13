@@ -220,16 +220,21 @@ class Job(Base):
 
 
 class Product(Base):
-    """A digital product the seller describes on the Generate page."""
+    """A digital product the seller describes on the Generate page.
+    Minimal-question intake: images (+ optional product file) carry most of
+    the information; name may be AI-inferred after generation."""
     __tablename__ = "products"
     id = Column(String, primary_key=True, default=_uuid)
     user_id = Column(String, ForeignKey("users.id"), index=True, nullable=False)
     name = Column(String, nullable=False)
-    category = Column(String, nullable=True)
+    category = Column(String, nullable=True)      # "Group / Subcategory"
     style = Column(String, nullable=True)
     target_audience = Column(Text, nullable=True)
     notes = Column(Text, nullable=True)
-    files = Column(JSON, default=list)
+    brand_name = Column(String, nullable=True)          # optional brand style
+    color_preferences = Column(String, nullable=True)
+    file_link = Column(String, nullable=True)           # e.g. Canva share link
+    files = Column(JSON, default=list)  # [{upload_id,name,type,path,kind:image|asset}]
     thumbnail_url = Column(String, nullable=True)
     created_at = Column(DateTime, default=_now)
 

@@ -70,13 +70,13 @@ export const api = {
   me: () => request<AuthUser>("/api/auth/me"),
 
   // uploads + vision identification
-  uploadImage: async (file: File) => {
+  uploadImage: async (file: File, kind: "image" | "asset" = "image") => {
     const form = new FormData();
     form.append("file", file);
     const headers: Record<string, string> = {};
     const token = getToken();
     if (token) headers.Authorization = `Bearer ${token}`;
-    const res = await fetch("/api/growth/uploads", { method: "POST", headers, body: form });
+    const res = await fetch(`/api/growth/uploads?kind=${kind}`, { method: "POST", headers, body: form });
     if (!res.ok) {
       let detail = res.statusText;
       try {
@@ -97,12 +97,16 @@ export const api = {
   // products
   products: () => request<ProductRow[]>("/api/growth/products"),
   createProduct: (body: {
-    name: string;
+    name?: string | null;
     category?: string | null;
     style?: string | null;
     target_audience?: string | null;
     notes?: string | null;
+    brand_name?: string | null;
+    color_preferences?: string | null;
+    file_link?: string | null;
     upload_ids?: string[];
+    asset_upload_ids?: string[];
   }) => request<ProductRow>("/api/growth/products", { method: "POST", body: JSON.stringify(body) }),
 
   // generation

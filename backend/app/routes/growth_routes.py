@@ -32,12 +32,18 @@ router = APIRouter(prefix="/api/growth", tags=["growth"])
 
 
 class ProductCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=300)
+    # Minimal-question intake: everything optional except the images —
+    # the product itself provides the information.
+    name: str | None = Field(default=None, max_length=300)
     category: str | None = None
     style: str | None = None
     target_audience: str | None = None
     notes: str | None = None
+    brand_name: str | None = None
+    color_preferences: str | None = None
+    file_link: str | None = None
     upload_ids: list[str] = Field(default_factory=list)
+    asset_upload_ids: list[str] = Field(default_factory=list)
 
 
 class IdentifyBody(BaseModel):
@@ -96,16 +102,20 @@ def _owned_uploads(upload_ids: list[str], user: User, db: Session) -> list[Uploa
 
 
 @router.post("/uploads")
-async def upload_image(file: UploadFile, user: User = Depends(get_current_user),
+async def upload_image(file: UploadFile, kind: str = "image",
+                       user: User = Depends(get_current_user),
                        db: Session = Depends(get_db)):
+    """kind=image (default): product images. kind=asset: the product file
+    itself (PDF / ZIP / SVG) so the AI can read what's actually included."""
     try:
-        upload_id, path = await storage.save_upload(user.id, file)
+        upload_id, path = await storage.save_upload(user.id, file,
+                                                    allow_assets=(kind == "asset"))
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     db.add(Upload(id=upload_id, user_id=user.id, filename=file.filename or "upload",
                   content_type=file.content_type or "image/png", path=path))
     db.commit()
-    return {"upload_id": upload_id, "filename": file.filename}
+    return {"upload_id": upload_id, "filename": file.filename, "kind": kind}
 
 
 @router.post("/identify")
@@ -128,12 +138,19 @@ def create_product(body: ProductCreate, user: User = Depends(get_current_user),
                    db: Session = Depends(get_db)):
     files = []
     if body.upload_ids:
-        files = [{"upload_id": u.id, "name": u.filename, "type": u.content_type,
-                  "path": u.path, "size": 0}
-                 for u in _owned_uploads(body.upload_ids, user, db)]
-    p = Product(user_id=user.id, name=body.name.strip(), category=body.category,
-                style=body.style, target_audience=body.target_audience,
-                notes=body.notes, files=files)
+        files += [{"upload_id": u.id, "name": u.filename, "type": u.content_type,
+                   "path": u.path, "size": 0, "kind": "image"}
+                  for u in _owned_uploads(body.upload_ids, user, db)]
+    if body.asset_upload_ids:
+        files += [{"upload_id": u.id, "name": u.filename, "type": u.content_type,
+                   "path": u.path, "size": 0, "kind": "asset"}
+                  for u in _owned_uploads(body.asset_upload_ids, user, db)]
+    p = Product(user_id=user.id,
+                name=(body.name or "").strip() or "Untitled product",
+                category=body.category, style=body.style,
+                target_audience=body.target_audience, notes=body.notes,
+                brand_name=body.brand_name, color_preferences=body.color_preferences,
+                file_link=body.file_link, files=files)
     db.add(p)
     db.commit()
     return _product_dict(p)
@@ -169,6 +186,9 @@ def generate(body: GenerateBody, user: User = Depends(get_current_user),
         status="generated", score=result.scores.overall,
         result_json=result.model_dump(mode="json"))
     db.add(listing)
+    # minimal-question flow: if the seller never named the product, the AI did
+    if product.name == "Untitled product":
+        product.name = result.titles.best[:120]
     db.commit()
     record_usage(db, user, listing.id, usage)
     return {"listing_id": listing.id, "result": listing.result_json}

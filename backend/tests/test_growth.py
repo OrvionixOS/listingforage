@@ -257,7 +257,7 @@ def make_identification() -> dict:
                        "aesthetic. Position them as luxury digital papers, seamless backgrounds "
                        "and texture overlays — that attracts higher-value buyers.",
         "suggested_name": "Luxury Metallic Digital Paper Bundle",
-        "category": "Digital Download",
+        "category": "Graphics & Digital Assets / Textures",
         "style": "Luxury",
         "target_buyers": ["graphic designers", "branding agencies", "invitation designers"],
         "seo_title": "Luxury Metallic Digital Paper Bundle, Gold Silver Copper Rose Gold "
@@ -351,9 +351,74 @@ def test_upload_identify_and_grounded_generation():
     image_blocks = [b for b in content if b.get("type") == "image"]
     assert len(image_blocks) == 2
     text_block = next(b for b in content if b.get("type") == "text")
-    assert "The attached images ARE the product" in text_block["text"]
+    assert "The attached images and files ARE the product" in text_block["text"]
     print("PASS upload→identify→grounded generation: files stored, vision paths real, "
           "generation received 2 image blocks")
+
+
+def test_minimal_intake_asset_analysis_and_autoname():
+    """The no-questions flow: no product name, a ZIP product file, brand style.
+    The ZIP is inventoried into the prompt, brand fields reach the brief, and
+    the product is auto-named from the generated title."""
+    import io
+    import zipfile as zf
+
+    client, headers = fresh_client()
+
+    # image (required) + zip product file (optional, kind=asset)
+    img = client.post("/api/growth/uploads", headers=headers,
+                      files={"file": ("cover.png", _tiny_png(), "image/png")})
+    zbuf = io.BytesIO()
+    with zf.ZipFile(zbuf, "w") as z:
+        for i in range(4):
+            z.writestr(f"papers/texture_{i}.png", b"fake")
+        z.writestr("README.pdf", b"fake")
+    asset = client.post("/api/growth/uploads?kind=asset", headers=headers,
+                        files={"file": ("gold-pack.zip", zbuf.getvalue(), "application/zip")})
+    assert asset.status_code == 200, asset.text
+
+    # a zip must be rejected on the default image-only kind
+    zbuf.seek(0)
+    rejected = client.post("/api/growth/uploads", headers=headers,
+                           files={"file": ("x.zip", zbuf.getvalue(), "application/zip")})
+    assert rejected.status_code == 400
+
+    p = client.post("/api/growth/products", headers=headers,
+                    json={"category": "Graphics & Digital Assets / Textures",
+                          "style": "Luxury", "brand_name": "Luxe Surfaces",
+                          "color_preferences": "gold, ivory",
+                          "file_link": "https://www.canva.com/design/abc",
+                          "upload_ids": [img.json()["upload_id"]],
+                          "asset_upload_ids": [asset.json()["upload_id"]]})
+    assert p.status_code == 200, p.text
+    assert p.json()["name"] == "Untitled product"
+    kinds = sorted(f["kind"] for f in p.json()["files"])
+    assert kinds == ["asset", "image"]
+
+    captured = {}
+
+    def fake_call(system, content, schema, **kw):
+        captured["content"] = content
+        return elevate.ListingResult.model_validate(make_result()), {"tokens_in": 1, "tokens_out": 1}
+
+    with patch.object(elevate, "structured_call", fake_call):
+        g = client.post("/api/growth/generate", headers=headers,
+                        json={"product_id": p.json()["id"]})
+    assert g.status_code == 200, g.text
+
+    content = captured["content"]
+    assert isinstance(content, list)
+    text = next(b for b in content if b.get("type") == "text")["text"]
+    assert "PRODUCT FILE CONTENTS" in text and "ZIP containing 5 files" in text
+    assert "4x .png" in text and "BRAND NAME: Luxe Surfaces" in text
+    assert "gold, ivory" in text and "canva.com" in text
+    assert "infer the best product name" in text
+
+    # product auto-named from the generated best title
+    products = client.get("/api/growth/products", headers=headers).json()
+    assert products[0]["name"].startswith("Boho Wedding Invitation Template")
+    print("PASS minimal intake: zip inventoried into prompt, brand fields briefed, "
+          "zip rejected as image, product auto-named from result")
 
 
 def test_real_identify_builds_blocks(tmp_path=None):
@@ -372,7 +437,7 @@ def test_real_identify_builds_blocks(tmp_path=None):
 
     with patch.object(elevate, "structured_call", fake_call):
         result, _ = elevate.identify_product([str(img)])
-    assert result.category == "Digital Download"
+    assert result.category == "Graphics & Digital Assets / Textures"
     blocks = [b for b in captured["content"] if b.get("type") == "image"]
     assert len(blocks) == 1 and blocks[0]["source"]["media_type"] == "image/jpeg", \
         "images are downscaled and re-encoded as JPEG for the vision call"
@@ -393,5 +458,6 @@ if __name__ == "__main__":
     test_improve_directives()
     test_identification_schema()
     test_upload_identify_and_grounded_generation()
+    test_minimal_intake_asset_analysis_and_autoname()
     test_real_identify_builds_blocks()
     print("\nALL GROWTH TESTS PASSED")
