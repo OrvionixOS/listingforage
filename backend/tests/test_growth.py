@@ -609,6 +609,39 @@ def test_fetch_competitor_facts_live_and_fallback():
     print("PASS competitor facts: live fetch measured, non-Etsy URL degrades honestly")
 
 
+def test_startup_migration_adds_missing_columns():
+    """Reproduces the production failure: a products table created BEFORE
+    brand_name/color_preferences/file_link existed (persistent SQLite disk on
+    Render) must be auto-migrated at startup instead of crashing queries."""
+    from sqlalchemy import inspect, text
+
+    from app.database import Base, Product, SessionLocal, engine, init_db
+
+    Base.metadata.drop_all(bind=engine)
+    # old-schema products table, as an earlier deploy created it
+    with engine.begin() as conn:
+        conn.execute(text("""
+            CREATE TABLE products (
+                id VARCHAR PRIMARY KEY, user_id VARCHAR NOT NULL,
+                name VARCHAR NOT NULL, category VARCHAR, style VARCHAR,
+                target_audience TEXT, notes TEXT, files JSON,
+                thumbnail_url VARCHAR, created_at DATETIME)"""))
+        conn.execute(text(
+            "INSERT INTO products (id, user_id, name) VALUES ('p1', 'u1', 'Old Product')"))
+
+    init_db()  # must add the new columns without touching existing data
+
+    cols = {c["name"] for c in inspect(engine).get_columns("products")}
+    for needed in ("brand_name", "color_preferences", "file_link"):
+        assert needed in cols, f"startup migration must add {needed}"
+
+    db = SessionLocal()
+    row = db.query(Product).filter(Product.user_id == "u1").first()  # the query that crashed
+    assert row is not None and row.name == "Old Product" and row.brand_name is None
+    db.close()
+    print("PASS startup migration: old-schema table gains new columns, data intact, query works")
+
+
 def test_listing_package():
     client, headers = fresh_client()
     result = elevate.ListingResult.model_validate(make_result())
@@ -641,5 +674,6 @@ if __name__ == "__main__":
     test_growth_lab_tools_persist()
     test_beat_competitor_flow()
     test_fetch_competitor_facts_live_and_fallback()
+    test_startup_migration_adds_missing_columns()
     test_listing_package()
     print("\nALL GROWTH TESTS PASSED")
