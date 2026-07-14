@@ -642,6 +642,77 @@ def test_startup_migration_adds_missing_columns():
     print("PASS startup migration: old-schema table gains new columns, data intact, query works")
 
 
+def test_image_renderer_produces_10_real_files():
+    """The renderer composites product images into 10 finished 2000x2000 PNGs."""
+    import tempfile
+
+    from PIL import Image
+
+    from app import listing_images as li
+    d = tempfile.mkdtemp()
+    for i in range(3):
+        Image.new("RGB", (900, 900), (150 + i * 20, 120, 80)).save(f"{d}/p{i}.png")
+    out = tempfile.mkdtemp()
+    meta = li.render_gallery(make_result(), [f"{d}/p{i}.png" for i in range(3)], out)
+    assert len(meta) == 10
+    assert sorted(m["n"] for m in meta) == list(range(1, 11))
+    for m in meta:
+        img = Image.open(f"{out}/{m['file']}")
+        assert img.size == (2000, 2000)
+    print("PASS image renderer: 10 finished 2000x2000 PNGs composited from product images")
+
+
+def test_generate_renders_gallery_and_serves_it():
+    """End-to-end: generate → gallery rendered & served; zip download works."""
+    client, headers = fresh_client()
+    img = client.post("/api/growth/uploads", headers=headers,
+                      files={"file": ("cover.png", _tiny_png(), "image/png")})
+    p = client.post("/api/growth/products", headers=headers,
+                    json={"name": "Textures", "upload_ids": [img.json()["upload_id"]]})
+    result = elevate.ListingResult.model_validate(make_result())
+    with patch.object(elevate, "generate", lambda *a, **k: (result, {"tokens_in": 1, "tokens_out": 1})):
+        g = client.post("/api/growth/generate", headers=headers,
+                        json={"product_id": p.json()["id"]})
+    lid = g.json()["listing_id"]
+
+    got = client.get(f"/api/growth/listings/{lid}", headers=headers).json()["result"]
+    rendered = got.get("renderedImages")
+    assert rendered and len(rendered) == 10, "generate must render the 10-image gallery"
+    assert rendered[0]["url"].endswith("/gallery/1")
+
+    # each image serves as a real PNG
+    r1 = client.get(f"/api/growth/listings/{lid}/gallery/1", headers=headers)
+    assert r1.status_code == 200 and r1.headers["content-type"] == "image/png"
+    assert r1.content[:8] == b"\x89PNG\r\n\x1a\n"
+
+    # zip of all images
+    z = client.get(f"/api/growth/listings/{lid}/gallery.zip", headers=headers)
+    assert z.status_code == 200 and z.headers["content-type"] == "application/zip"
+
+    # re-render endpoint
+    rr = client.post(f"/api/growth/listings/{lid}/render", headers=headers)
+    assert len(rr.json()["rendered"]) == 10
+    print("PASS gallery pipeline: generate renders 10 images, each serves as PNG, zip + re-render work")
+
+
+def test_vision_cap_raised_to_20():
+    """The 12-images-only-8-seen bug: the cap must let a full pack through."""
+    import tempfile
+
+    from PIL import Image
+
+    d = tempfile.mkdtemp()
+    paths = []
+    for i in range(12):
+        pth = f"{d}/img{i}.png"
+        Image.new("RGB", (400, 400), (i * 15, 100, 120)).save(pth)
+        paths.append(pth)
+    blocks = elevate._image_blocks(paths)
+    assert len(blocks) == 12, f"all 12 images must be seen, got {len(blocks)}"
+    assert elevate.MAX_VISION_IMAGES >= 20
+    print(f"PASS vision cap: all 12 images become vision blocks (cap {elevate.MAX_VISION_IMAGES})")
+
+
 def test_listing_package():
     client, headers = fresh_client()
     result = elevate.ListingResult.model_validate(make_result())
@@ -675,5 +746,8 @@ if __name__ == "__main__":
     test_beat_competitor_flow()
     test_fetch_competitor_facts_live_and_fallback()
     test_startup_migration_adds_missing_columns()
+    test_image_renderer_produces_10_real_files()
+    test_generate_renders_gallery_and_serves_it()
+    test_vision_cap_raised_to_20()
     test_listing_package()
     print("\nALL GROWTH TESTS PASSED")

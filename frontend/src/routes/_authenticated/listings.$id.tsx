@@ -7,6 +7,7 @@ import { PageHeader } from "@/components/dashboard-shell";
 import { EmptyState } from "@/components/empty-state";
 import { ImproveBar } from "@/components/improve-bar";
 import { GrowthLab, TeardownCard } from "@/components/growth-lab";
+import { RenderedGallery } from "@/components/rendered-gallery";
 import {
   ScoreBreakdown,
   ProductAnalysisSection,
@@ -14,7 +15,6 @@ import {
   MarketSection,
   CompetitorSection,
   BrandSection,
-  ImagesSection,
 } from "@/components/listing-sections";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -103,7 +103,7 @@ function ListingDetail() {
           </div>
         </TabsContent>
         <TabsContent value="brand"><BrandSection result={result} /></TabsContent>
-        <TabsContent value="images"><ImagesSection result={result} /></TabsContent>
+        <TabsContent value="images"><RenderedGallery listingId={listing.id} result={result} /></TabsContent>
         <TabsContent value="growth"><GrowthLab listingId={listing.id} result={result} /></TabsContent>
         <TabsContent value="analysis"><ProductAnalysisSection result={result} /></TabsContent>
       </Tabs>
