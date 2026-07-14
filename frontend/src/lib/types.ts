@@ -119,6 +119,8 @@ export interface ListingResult {
   upgradePlan?: UpgradePlan;
   expansionPlan?: ExpansionPlan;
   competitorTeardown?: CompetitorTeardown;
+  // finished, rendered listing images (composited from the product images)
+  renderedImages?: { n: number; title: string; purpose: string; url: string }[];
 }
 
 export interface ThumbnailVariation {

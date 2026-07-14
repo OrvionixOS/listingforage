@@ -135,6 +135,26 @@ export const api = {
     ),
   listingPackage: (listingId: string) =>
     request<{ package: string }>(`/api/growth/listings/${listingId}/package`),
+  renderGallery: (listingId: string) =>
+    request<{ rendered: { n: number; title: string; purpose: string; url: string }[] }>(
+      `/api/growth/listings/${listingId}/render`, { method: "POST" }),
+  // authed blob fetch for <img> (bearer header can't ride on an img src)
+  galleryBlobUrl: async (listingId: string, n: number) => {
+    const headers: Record<string, string> = {};
+    const token = getToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`/api/growth/listings/${listingId}/gallery/${n}`, { headers });
+    if (!res.ok) throw new Error("Image not available");
+    return URL.createObjectURL(await res.blob());
+  },
+  galleryZip: async (listingId: string) => {
+    const headers: Record<string, string> = {};
+    const token = getToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`/api/growth/listings/${listingId}/gallery.zip`, { headers });
+    if (!res.ok) throw new Error("No rendered images yet");
+    return await res.blob();
+  },
 
   // listings
   listings: () => request<ListingRow[]>("/api/growth/listings"),

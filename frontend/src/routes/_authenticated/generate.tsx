@@ -61,30 +61,31 @@ function Generate() {
 
   const addImages = async (list: FileList | null) => {
     if (!list?.length) return;
-    try {
-      const added: Uploaded[] = [];
-      for (const f of Array.from(list)) {
+    // each file is independent: one failure must not drop the rest of the batch
+    let failed = 0;
+    for (const f of Array.from(list)) {
+      try {
         const r = await api.uploadImage(f);
-        added.push({ uploadId: r.upload_id, name: f.name, previewUrl: URL.createObjectURL(f) });
+        setImages((p) => [...p, { uploadId: r.upload_id, name: f.name, previewUrl: URL.createObjectURL(f) }]);
+      } catch {
+        failed += 1;
       }
-      setImages((p) => [...p, ...added]);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Upload failed");
     }
+    if (failed) toast.error(`${failed} image${failed > 1 ? "s" : ""} couldn't be uploaded (unsupported type or too large).`);
   };
 
   const addAssets = async (list: FileList | null) => {
     if (!list?.length) return;
-    try {
-      const added: Uploaded[] = [];
-      for (const f of Array.from(list)) {
+    let failed = 0;
+    for (const f of Array.from(list)) {
+      try {
         const r = await api.uploadImage(f, "asset");
-        added.push({ uploadId: r.upload_id, name: f.name });
+        setAssets((p) => [...p, { uploadId: r.upload_id, name: f.name }]);
+      } catch {
+        failed += 1;
       }
-      setAssets((p) => [...p, ...added]);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Upload failed");
     }
+    if (failed) toast.error(`${failed} file${failed > 1 ? "s" : ""} couldn't be uploaded.`);
   };
 
   const identify = async () => {

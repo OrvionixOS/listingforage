@@ -16,13 +16,14 @@ request runs), exactly like the original app.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from .. import elevate
+from .. import elevate, listing_images
 from ..auth import get_current_user
 from ..billing import check_quota, record_usage
 from ..database import GrowthListing, Product, Profile, Upload, User, get_db
@@ -168,6 +169,30 @@ def list_products(user: User = Depends(get_current_user), db: Session = Depends(
     return [_product_dict(p) for p in rows]
 
 
+def _product_image_paths(product) -> list[str]:
+    return [f["path"] for f in (getattr(product, "files", None) or [])
+            if isinstance(f, dict) and f.get("path") and f.get("kind") != "asset"]
+
+
+def _render_gallery(listing: GrowthListing, product, db: Session) -> None:
+    """Render the 10 finished listing images from the seller's product images
+    + brand palette, store them, and record their served URLs on the result.
+    Never fatal — a render failure leaves the image plan intact."""
+    try:
+        out_dir = f"{storage.root}/generated/{listing.id}"
+        meta = listing_images.render_gallery(
+            listing.result_json, _product_image_paths(product), out_dir)
+        for m in meta:
+            m["url"] = f"/api/growth/listings/{listing.id}/gallery/{m['n']}"
+        merged = dict(listing.result_json or {})
+        merged["renderedImages"] = meta
+        listing.result_json = merged
+        db.commit()
+    except Exception:
+        import logging
+        logging.getLogger("listingforge.api").exception("gallery render failed")
+
+
 # --- generation ---------------------------------------------------------------
 
 @router.post("/generate")
@@ -196,6 +221,7 @@ def generate(body: GenerateBody, user: User = Depends(get_current_user),
         product.name = result.titles.best[:120]
     db.commit()
     record_usage(db, user, listing.id, usage)
+    _render_gallery(listing, product, db)
     return {"listing_id": listing.id, "result": listing.result_json}
 
 
@@ -218,6 +244,7 @@ def improve(listing_id: str, body: ImproveBody,
     listing.result_json = result.model_dump(mode="json")
     db.commit()
     record_usage(db, user, listing.id, usage)
+    _render_gallery(listing, product, db)
     return {"listing_id": listing.id, "result": listing.result_json}
 
 
@@ -309,8 +336,9 @@ def beat_competitor(body: BeatCompetitorBody, user: User = Depends(get_current_u
     db.add(listing)
     db.commit()
     record_usage(db, user, listing.id, usage)
+    _render_gallery(listing, product, db)
     return {"listing_id": listing.id, "teardown": merged["competitorTeardown"],
-            "result": merged}
+            "result": listing.result_json}
 
 
 @router.get("/listings/{listing_id}/package")
@@ -319,6 +347,49 @@ def listing_package(listing_id: str, user: User = Depends(get_current_user),
     """One-click Etsy listing package: everything ready to upload, as text."""
     listing = _owned_listing(listing_id, user, db)
     return {"package": elevate.build_package(_product_for(listing, db), listing.result_json)}
+
+
+# --- rendered listing images: serve files, re-render, download all ------------
+
+@router.get("/listings/{listing_id}/gallery/{n}")
+def gallery_image(listing_id: str, n: int, user: User = Depends(get_current_user),
+                  db: Session = Depends(get_db)):
+    from fastapi.responses import FileResponse
+    listing = _owned_listing(listing_id, user, db)
+    path = Path(f"{storage.root}/generated/{listing.id}/image_{n:02d}.png")
+    if not path.exists():
+        raise HTTPException(404, "Image not rendered.")
+    return FileResponse(str(path), media_type="image/png",
+                        filename=f"etsy-image-{n:02d}.png")
+
+
+@router.post("/listings/{listing_id}/render")
+def render_gallery(listing_id: str, user: User = Depends(get_current_user),
+                   db: Session = Depends(get_db)):
+    """(Re)render the 10 listing images — e.g. after editing the brand palette."""
+    listing = _owned_listing(listing_id, user, db)
+    _render_gallery(listing, _product_for(listing, db), db)
+    return {"rendered": (listing.result_json or {}).get("renderedImages", [])}
+
+
+@router.get("/listings/{listing_id}/gallery.zip")
+def gallery_zip(listing_id: str, user: User = Depends(get_current_user),
+                db: Session = Depends(get_db)):
+    import io
+    import zipfile
+
+    from fastapi.responses import StreamingResponse
+    listing = _owned_listing(listing_id, user, db)
+    gdir = Path(f"{storage.root}/generated/{listing.id}")
+    if not gdir.exists():
+        raise HTTPException(404, "No rendered images yet.")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for p in sorted(gdir.glob("image_*.png")):
+            z.write(p, p.name)
+    buf.seek(0)
+    return StreamingResponse(buf, media_type="application/zip", headers={
+        "Content-Disposition": f'attachment; filename="etsy-listing-images-{listing_id[:8]}.zip"'})
 
 
 # --- listings -----------------------------------------------------------------

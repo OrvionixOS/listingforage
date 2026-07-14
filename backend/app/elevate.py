@@ -31,16 +31,20 @@ from .pipeline.llm import structured_call
 
 MEDIA_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                ".png": "image/png", ".webp": "image/webp", ".gif": "image/gif"}
-MAX_VISION_IMAGES = 8
+MAX_VISION_IMAGES = 20  # let the AI actually see a full pack, not just 8
 MAX_VISION_EDGE = 1568  # Anthropic's optimal max image edge
 
 
 def _image_blocks(image_paths: list[str]) -> list[dict]:
     """Product images → vision blocks. Downscaled + re-encoded as JPEG so a
-    pack of multi-MB PNGs doesn't balloon the request (detail at 1568px is
-    plenty for identification and grounding)."""
+    pack of many multi-MB images doesn't balloon the request. When a lot of
+    images are sent, the per-image edge is trimmed so the whole batch stays
+    within a sane token budget while every image is still seen."""
+    paths = image_paths[:MAX_VISION_IMAGES]
+    # more images → smaller each, so 20 images don't blow the request size
+    edge = MAX_VISION_EDGE if len(paths) <= 6 else (1120 if len(paths) <= 12 else 784)
     blocks = []
-    for p in image_paths[:MAX_VISION_IMAGES]:
+    for p in paths:
         path = Path(p)
         if not path.exists() or path.suffix.lower() not in MEDIA_TYPES:
             continue
@@ -49,9 +53,9 @@ def _image_blocks(image_paths: list[str]) -> list[dict]:
 
             from PIL import Image
             img = Image.open(path)
-            img.thumbnail((MAX_VISION_EDGE, MAX_VISION_EDGE))
+            img.thumbnail((edge, edge))
             buf = io.BytesIO()
-            img.convert("RGB").save(buf, "JPEG", quality=85)
+            img.convert("RGB").save(buf, "JPEG", quality=82)
             data, media = buf.getvalue(), "image/jpeg"
         except Exception:
             data, media = path.read_bytes(), MEDIA_TYPES[path.suffix.lower()]
