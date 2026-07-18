@@ -162,6 +162,11 @@ export const api = {
   deleteListing: (id: string) =>
     request<{ ok: boolean }>(`/api/growth/listings/${id}`, { method: "DELETE" }),
 
+  // diagnostics
+  etsyCheck: () =>
+    request<{ configured: boolean; ok: boolean; status?: number; key_length?: number; detail: string }>(
+      "/api/growth/etsy-check"),
+
   // profile
   profile: () =>
     request<{ display_name: string | null; brand_name: string | null }>("/api/growth/profile"),

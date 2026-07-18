@@ -51,10 +51,16 @@ class EtsyAPIError(RuntimeError):
         super().__init__(f"Etsy API {status}: {body}")
 
 
+def _clean_key(v: str) -> str:
+    """Env-var hygiene: pasted keys often carry a trailing newline, spaces, or
+    wrapping quotes — any of which makes Etsy reject the x-api-key header."""
+    return (v or "").strip().strip('"').strip("'").strip()
+
+
 class EtsyClient:
     def __init__(self, api_key: str | None = None, transport: Transport | None = None):
-        self.api_key = api_key or os.getenv("ETSY_API_KEY", "")
-        self.redirect_uri = os.getenv("ETSY_REDIRECT_URI", "http://localhost:8000/api/etsy/callback")
+        self.api_key = _clean_key(api_key or os.getenv("ETSY_API_KEY", ""))
+        self.redirect_uri = _clean_key(os.getenv("ETSY_REDIRECT_URI", "http://localhost:8000/api/etsy/callback"))
         self.transport = transport or HttpxTransport()
 
     # ---- OAuth 2.0 PKCE -----------------------------------------------------

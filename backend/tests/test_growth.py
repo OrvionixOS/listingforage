@@ -712,6 +712,46 @@ def test_vision_cap_raised_to_20():
     print(f"PASS vision cap: all 12 images become vision blocks (cap {elevate.MAX_VISION_IMAGES})")
 
 
+def test_etsy_key_hygiene_and_check_endpoint():
+    """Pasted keys with quotes/newlines are sanitized; /etsy-check reports
+    Etsy's real answer (accept and reject paths) instead of guesswork."""
+    from app.etsy.client import EtsyAPIError, EtsyClient, _clean_key
+
+    assert _clean_key('  "abc123keystring"\n') == "abc123keystring"
+    assert _clean_key("'abc'") == "abc"
+    c = EtsyClient(api_key='"padded-key"\n')
+    assert c.api_key == "padded-key"
+
+    client, headers = fresh_client()
+
+    class OkT:
+        def request(self, method, url, **kw):
+            assert kw["headers"]["x-api-key"] == "goodkey"
+            return {"results": [{"title": "x"}]}
+
+    class DenyT:
+        def request(self, method, url, **kw):
+            raise EtsyAPIError(403, '{"error":"Shared secret is required in x-api-key header."}')
+
+    def fake_init(transport):
+        def _init(self, api_key=None, transport_=None):
+            self.api_key = "goodkey"
+            self.redirect_uri = "x"
+            self.transport = transport
+        return _init
+
+    with patch("app.etsy.client.EtsyClient.__init__", fake_init(OkT())):
+        r = client.get("/api/growth/etsy-check", headers=headers)
+    assert r.json()["ok"] is True and "accepted" in r.json()["detail"]
+
+    with patch("app.etsy.client.EtsyClient.__init__", fake_init(DenyT())):
+        r2 = client.get("/api/growth/etsy-check", headers=headers)
+    body = r2.json()
+    assert body["ok"] is False and body["status"] == 403
+    assert "Open API v3" in body["detail"], "403 must carry the v3-access hint"
+    print("PASS etsy diagnostics: key sanitized, check endpoint reports accept/deny with v3 hint")
+
+
 def test_listing_package():
     client, headers = fresh_client()
     result = elevate.ListingResult.model_validate(make_result())
@@ -748,5 +788,6 @@ if __name__ == "__main__":
     test_image_renderer_produces_10_real_files()
     test_generate_renders_gallery_and_serves_it()
     test_vision_cap_raised_to_20()
+    test_etsy_key_hygiene_and_check_endpoint()
     test_listing_package()
     print("\nALL GROWTH TESTS PASSED")

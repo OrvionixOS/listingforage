@@ -420,6 +420,35 @@ def delete_listing(listing_id: str, user: User = Depends(get_current_user),
     return {"ok": True}
 
 
+# --- Etsy connection diagnostic -----------------------------------------------
+
+@router.get("/etsy-check")
+def etsy_check(user: User = Depends(get_current_user)):
+    """Live Etsy credential test: makes one real API call and returns exactly
+    what Etsy answered, so key problems stop being guesswork."""
+    from ..etsy.client import EtsyAPIError, EtsyClient
+    client = EtsyClient()
+    if not client.api_key:
+        return {"configured": False, "ok": False,
+                "detail": "ETSY_API_KEY is not set on the server."}
+    info = {"configured": True, "key_length": len(client.api_key)}
+    try:
+        rows = client.search_active_public("digital download", limit=1)
+        return {**info, "ok": True,
+                "detail": f"Etsy accepted the key — search returned {len(rows)} result(s). "
+                          "Live market data is active."}
+    except EtsyAPIError as exc:
+        hint = ""
+        if exc.status == 403:
+            hint = (" Hint: a 403 with a correct, approved keystring usually means the app's "
+                    "credentials are not enabled for Open API v3 — in the Etsy developer portal "
+                    "check that this app shows 'Open API v3' access (legacy v2-era apps need a "
+                    "v3-enabled app / new keystring).")
+        return {**info, "ok": False, "status": exc.status, "detail": str(exc) + hint}
+    except Exception as exc:
+        return {**info, "ok": False, "detail": f"Request failed before reaching Etsy: {exc}"}
+
+
 # --- profile ------------------------------------------------------------------
 
 @router.get("/profile")

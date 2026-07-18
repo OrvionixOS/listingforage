@@ -65,6 +65,7 @@ function Settings() {
             {busy && <Loader2 className="h-4 w-4 animate-spin" />} Save changes
           </Button>
         </Card>
+        <EtsyCheckCard />
         <Card className="flex items-center justify-between p-6">
           <div>
             <h3 className="font-semibold">Sign out</h3>
@@ -74,5 +75,44 @@ function Settings() {
         </Card>
       </div>
     </div>
+  );
+}
+
+function EtsyCheckCard() {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; detail: string; status?: number } | null>(null);
+
+  const run = async () => {
+    setBusy(true);
+    setResult(null);
+    try {
+      setResult(await api.etsyCheck());
+    } catch (err) {
+      setResult({ ok: false, detail: err instanceof Error ? err.message : "Check failed" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card className="p-6">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h3 className="font-semibold">Etsy connection</h3>
+          <p className="text-sm text-muted-foreground">
+            Tests your ETSY_API_KEY with a real Etsy API call and shows exactly what Etsy answers.
+          </p>
+        </div>
+        <Button variant="outline" onClick={run} disabled={busy}>
+          {busy && <Loader2 className="h-4 w-4 animate-spin" />} Test connection
+        </Button>
+      </div>
+      {result && (
+        <div className={`mt-4 rounded-lg border p-3 text-sm ${result.ok ? "border-green-600/40 bg-green-600/10 text-green-500" : "border-destructive/40 bg-destructive/10 text-destructive"}`}>
+          {result.ok ? "✓ " : "✗ "}
+          {result.detail}
+        </div>
+      )}
+    </Card>
   );
 }
