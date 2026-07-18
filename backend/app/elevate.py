@@ -67,6 +67,26 @@ def _image_blocks(image_paths: list[str]) -> list[dict]:
     return blocks
 
 
+def _normalize_etsy_tags(v):
+    """Etsy tags are <=20 chars. The model occasionally goes over by a word
+    (e.g. 'fluid gold background', 21 chars) — trim at a word boundary,
+    lowercase, and dedupe instead of failing the entire generation over it."""
+    if not isinstance(v, list):
+        return v
+    out, seen = [], set()
+    for t in v:
+        t = " ".join(str(t).split()).strip().lower()
+        if len(t) > 20:
+            cut = t[:20]
+            if " " in cut:
+                cut = cut[:cut.rfind(" ")]
+            t = cut.strip(" ,.-")
+        if t and t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out[:13]
+
+
 # --- ListingResult schema (field names mirror the frontend types exactly) ---
 
 class _ProductAnalysis(BaseModel):
@@ -219,6 +239,11 @@ class ListingResult(BaseModel):
     scores: _Scores
     recommendations: list[str]
 
+    @field_validator("tags", mode="before")
+    @classmethod
+    def tags_normalized(cls, v):
+        return _normalize_etsy_tags(v)
+
     @field_validator("tags")
     @classmethod
     def tags_etsy_legal(cls, v: list[str]) -> list[str]:
@@ -348,6 +373,11 @@ class ProductIdentification(BaseModel):
     observed_details: str = Field(
         description="Objective inventory of what the images show: how many designs, colors, finishes, "
                     "textures, any visible text/mockups. Used to ground the full listing generation.")
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def tags_normalized(cls, v):
+        return _normalize_etsy_tags(v)
 
     @field_validator("tags")
     @classmethod

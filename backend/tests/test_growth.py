@@ -145,13 +145,13 @@ def test_result_schema_hard_rules():
     except Exception:
         pass
 
-    bad = make_result()
-    bad["tags"][0] = "this tag is way over twenty characters"
-    try:
-        elevate.ListingResult.model_validate(bad)
-        raise AssertionError("oversized tag must be rejected")
-    except Exception:
-        pass
+    # over-length tags are NORMALIZED (trimmed at a word boundary), not fatal —
+    # this exact failure took down identify in production: 'fluid gold background'
+    fixed = make_result()
+    fixed["tags"][0] = "fluid gold background"
+    ok2 = elevate.ListingResult.model_validate(fixed)
+    assert ok2.tags[0] == "fluid gold" and len(ok2.tags) == 13
+    assert all(len(t) <= 20 for t in ok2.tags)
 
     bad = make_result()
     bad["images"][3]["n"] = 3  # duplicate position
@@ -289,14 +289,13 @@ def _tiny_png() -> bytes:
 def test_identification_schema():
     ok = elevate.ProductIdentification.model_validate(make_identification())
     assert len(ok.tags) == 13
-    bad = make_identification()
-    bad["tags"][0] = "way too long for an etsy tag field"
-    try:
-        elevate.ProductIdentification.model_validate(bad)
-        raise AssertionError("oversized tag must be rejected")
-    except Exception:
-        pass
-    print("PASS identification schema: 13 tags enforced, tag length enforced")
+    # the production failure: model suggests a 21-char tag → normalized, not fatal
+    fixed = make_identification()
+    fixed["tags"][0] = "Fluid Gold Background"
+    ok2 = elevate.ProductIdentification.model_validate(fixed)
+    assert ok2.tags[0] == "fluid gold" and all(len(t) <= 20 for t in ok2.tags)
+    assert len(ok2.tags) == 13
+    print("PASS identification schema: 13 tags enforced, over-length tags auto-trimmed")
 
 
 def test_upload_identify_and_grounded_generation():

@@ -181,7 +181,8 @@ def _render_gallery(listing: GrowthListing, product, db: Session) -> None:
     try:
         out_dir = f"{storage.root}/generated/{listing.id}"
         meta = listing_images.render_gallery(
-            listing.result_json, _product_image_paths(product), out_dir)
+            listing.result_json, _product_image_paths(product), out_dir,
+            listing_id=listing.id, style=getattr(product, "style", "") or "")
         for m in meta:
             m["url"] = f"/api/growth/listings/{listing.id}/gallery/{m['n']}"
         merged = dict(listing.result_json or {})
